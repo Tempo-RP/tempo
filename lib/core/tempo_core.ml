@@ -26,7 +26,7 @@ let fork (proc : unit -> unit) : thread = perform (Fork proc)
 let join (thread_id : thread) : unit = perform (Join thread_id)
 
 let when_ (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
-  perform (With_guard (s, body))
+  perform (When (s, body))
 
 let watch (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
   perform (Watch (s, body))

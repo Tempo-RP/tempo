@@ -153,7 +153,7 @@ type _ Effect.t +=
   | Pause : unit Effect.t
   | Fork : (unit -> unit) -> thread Effect.t
   | Join : thread -> unit Effect.t
-  | With_guard :
+  | When :
       ('emit, 'agg, 'mode) signal_core * (unit -> unit)
       -> unit Effect.t
   | Watch :

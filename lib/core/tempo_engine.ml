@@ -308,7 +308,7 @@ let handle_task : scheduler_state -> task -> unit =
             "spawn logical thread=#%d as task=#%d" child_thread t'.t_id;
           continue k child_thread;
       (* Guarded and preemptive control operators *)
-      | effect (With_guard (s, body)), k ->
+      | effect (When (s, body)), k ->
           (* Safety invariant for [when_]:
              - never execute [body] inline in this handler frame because [body]
                can perform effects (await/pause/when_) that must be handled by
@@ -326,11 +326,11 @@ let handle_task : scheduler_state -> task -> unit =
                       (fun () -> continue k ())
                   in
                   dlog ~task:t.t_id "step"
-                    "with_guard exit | tasks=#%d -> task=#%d" t.t_id t'.t_id;
+                    "when exit | tasks=#%d -> task=#%d" t.t_id t'.t_id;
                 end)
           in
           dlog ~task:guard_task.t_id ~signal:s.s_id "step"
-            "with_guard enter | task=#%d signal=#%d -> schedule task=#%d"
+            "when enter | task=#%d signal=#%d -> schedule task=#%d"
             t.t_id s.s_id guard_task.t_id;
       | effect (Watch (s, body)), k ->
           if s.present then
