@@ -1,4 +1,3 @@
-open Effect
 open Tempo_types
 
 type kill = Tempo_types.kill
@@ -21,5 +20,3 @@ let abort_kill_core ~bump_epoch (k : kill) =
 let abort_kill (k : kill) = abort_kill_core ~bump_epoch:true k
 
 let abort_kill_batched (k : kill) = abort_kill_core ~bump_epoch:false k
-
-let with_kill (k : kill) (f : unit -> unit) = perform (With_kill (k, f))

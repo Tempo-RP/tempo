@@ -153,14 +153,11 @@ type _ Effect.t +=
   | Pause : unit Effect.t
   | Fork : (unit -> unit) -> thread Effect.t
   | Join : thread -> unit Effect.t
-  | Register_kill_watcher :
-      ('emit, 'agg, 'mode) signal_core * kill -> unit Effect.t
   | With_guard :
       ('emit, 'agg, 'mode) signal_core * (unit -> unit)
       -> unit Effect.t
   | Watch :
       ('emit, 'agg, 'mode) signal_core * (unit -> unit)
       -> unit Effect.t
-  | With_kill : kill * (unit -> unit) -> unit Effect.t
 
 exception Aborted

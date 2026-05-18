@@ -290,11 +290,6 @@ let handle_task : scheduler_state -> task -> unit =
             mark_suspended st.threads parent_thread;
             register_awaiter st s
               { resume; kill_ctx = parent_kill_ctx; thread = parent_thread };
-      (* Cancellation wiring *)
-      | effect (Register_kill_watcher (s, kill)), k ->
-          ensure_signal_tracked st s;
-          register_kill_watcher st s kill parent_kill_ctx;
-          continue k ();
       (* Scheduling and thread control *)
       | effect Pause, k ->
           let new_task =
@@ -324,7 +319,7 @@ let handle_task : scheduler_state -> task -> unit =
           let guard_task =
             spawn_now ~parent:t st parent_thread (Any s :: parent_guards) parent_kill_ctx
               (fun () ->
-                body (); (* body may perform an abort_kill*)
+                body ();
                 if parent_alive () then begin
                   let t' =
                     spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
@@ -337,64 +332,6 @@ let handle_task : scheduler_state -> task -> unit =
           dlog ~task:guard_task.t_id ~signal:s.s_id "step"
             "with_guard enter | task=#%d signal=#%d -> schedule task=#%d"
             t.t_id s.s_id guard_task.t_id;
-      | effect (With_kill (kk, body)), k ->
-          let resume_mode : [ `None | `Later | `Now ] ref = ref `None in
-          let resumed = ref false in
-          let resume_if mode () =
-            if (not !resumed) && !resume_mode = mode then begin
-              resumed := true;
-              continue k ()
-            end
-          in
-          let continue_now () =
-            kk.cleanup <- None;
-            if parent_alive () then begin
-              if !resume_mode <> `Now then begin
-                resume_mode := `Now;
-                let t' =
-                  spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                    (resume_if `Now)
-                in
-                dlog ~task:t.t_id "step"
-                  "with_kill exit | normal termination : task=#%d -> task=#%d"
-                  t.t_id t'.t_id;
-              end
-            end else
-              dlog ~task:t.t_id "step"
-                "with_kill exit | drop continuation (parent kill dead) task=#%d"
-                t.t_id;
-          and continue_later () =
-            kk.cleanup <- None;
-            if parent_alive () then begin
-              if !resume_mode = `None then begin
-                resume_mode := `Later;
-                let t' =
-                  spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
-                    (resume_if `Later)
-                in
-                dlog ~task:t.t_id "step"
-                  "with_kill | cancelation : task=#%d -> task #%d" t.t_id t'.t_id;
-              end
-            end else
-              dlog ~task:t.t_id "step"
-                "with_kill | cancelation drop (parent kill dead) task=#%d"
-                t.t_id;
-          in
-          if not !(kk.alive) then begin
-            continue_later ()
-          end else begin
-            kk.cleanup <- Some continue_later;
-            let runner () =
-              body ();
-              continue_now ()
-            in
-            let new_task =
-              spawn_now ~parent:t st parent_thread parent_guards
-                (push_kill_context kk parent_kill_ctx) runner
-            in
-            dlog ~task:new_task.t_id "step"
-              "with_kill enter | task=#%d -> task=#%d" t.t_id new_task.t_id
-          end;
       | effect (Watch (s, body)), k ->
           if s.present then
             continue k ()

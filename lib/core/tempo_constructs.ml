@@ -5,18 +5,23 @@ type 'a signal = 'a Tempo_core.signal
 
 let present_then_else (s : ('emit, 'agg, 'mode) signal_core)
     (then_ : unit -> unit) (else_ : unit -> unit) : unit =
-  let seen = ref false in
-  let kill = Tempo_low_level.new_kill () in
+  let decided = ref false in
+  let cancel = Tempo_core.new_signal () in
   let _ =
     Tempo_core.fork (fun () ->
-        Tempo_low_level.with_kill kill (fun () ->
+        Tempo_core.watch cancel (fun () ->
             Tempo_core.when_ s (fun () ->
-                seen := true;
-                then_ ())))
+                if not !decided then begin
+                  decided := true;
+                  then_ ()
+                end)))
   in
   Tempo_core.pause ();
-  if not !seen then else_ ();
-  Tempo_low_level.abort_kill kill
+  if not !decided then begin
+    decided := true;
+    Tempo_core.emit cancel ();
+    else_ ()
+  end
 
 let rec pause_n n =
   if n <= 0 then ()
