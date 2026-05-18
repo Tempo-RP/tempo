@@ -13,8 +13,6 @@ val emit : ('emit, 'agg, 'mode) signal_core -> 'emit -> unit
 val await : ('emit, 'agg, 'mode) signal_core -> 'agg
 val await_immediate : 'a signal -> 'a
 val pause : unit -> unit
-val fork : (unit -> unit) -> Tempo_types.thread
-val join : Tempo_types.thread -> unit
 
 val when_ : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
 val watch : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit

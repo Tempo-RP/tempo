@@ -10,7 +10,6 @@
   emit_once_await_one
   parallel
   pause
-  present_then_else
   watch_complete
   watch_killed
   watch_nested

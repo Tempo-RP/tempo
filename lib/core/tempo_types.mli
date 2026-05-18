@@ -151,8 +151,7 @@ type _ Effect.t +=
   | Await : ('emit, 'agg, 'mode) signal_core -> 'agg Effect.t
   | Await_immediate : ('a, 'a, event) signal_core -> 'a Effect.t
   | Pause : unit Effect.t
-  | Fork : (unit -> unit) -> thread Effect.t
-  | Join : thread -> unit Effect.t
+  | Parallel : (unit -> unit) list -> unit Effect.t
   | When :
       ('emit, 'agg, 'mode) signal_core * (unit -> unit)
       -> unit Effect.t

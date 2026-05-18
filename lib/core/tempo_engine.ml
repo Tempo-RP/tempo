@@ -216,6 +216,33 @@ let handle_task : scheduler_state -> task -> unit =
         Tempo_log.log ?task ?signal (ctx) scope fmt
       else Format.ifprintf Format.std_formatter fmt
     in
+    let handle_parallel procs k =
+      let resume () =
+        let t' =
+          spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+            (fun () -> continue k ())
+        in
+        dlog ~task:t.t_id "step.parallel"
+          "parallel resume | parent task=#%d as task=#%d" t.t_id t'.t_id
+      in
+      match procs with
+      | [] -> continue k ()
+      | _ ->
+          let parallel_thread = Tempo_thread.new_thread_id st in
+          List.iter
+            (fun proc ->
+              let child =
+                spawn_now ~parent:t st parallel_thread parent_guards
+                  parent_kill_ctx proc
+              in
+              dlog ~task:t.t_id "step.parallel"
+                "parallel spawn | parent task=#%d thread=#%d child task=#%d"
+                t.t_id parallel_thread child.t_id)
+            procs;
+          mark_suspended st.threads parent_thread;
+          add_join_waiter st.threads parallel_thread parent_thread
+            parent_kill_ctx resume
+    in
     let run_task () =
       match t.run () with
       (* Task termination *)
@@ -298,15 +325,7 @@ let handle_task : scheduler_state -> task -> unit =
           in
           dlog ~task:new_task.t_id "step"
             "pause | task=#%d resume next instant as task #%d" t.t_id new_task.t_id;
-      | effect (Fork p_child), k ->
-          let child_thread = Tempo_thread.new_thread_id st in
-          let t' =
-            spawn_now ~parent:t st child_thread parent_guards parent_kill_ctx
-              p_child
-          in
-          dlog ~task:t.t_id "step"
-            "spawn logical thread=#%d as task=#%d" child_thread t'.t_id;
-          continue k child_thread;
+      | effect (Parallel procs), k -> handle_parallel procs k;
       (* Guarded and preemptive control operators *)
       | effect (When (s, body)), k ->
           (* Safety invariant for [when_]:
@@ -399,38 +418,6 @@ let handle_task : scheduler_state -> task -> unit =
             dlog ~task:t.t_id ~signal:s.s_id "step"
               "watch enter | task=#%d signal=#%d -> task=#%d"
               t.t_id s.s_id t'.t_id;
-        | effect (Join thread_id), k ->
-          if thread_id = parent_thread then invalid_arg "join: cannot join current thread";
-          let resume () =
-            let t' =
-              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                (fun () -> continue k ())
-            in
-            dlog ~task:t.t_id "step.join"
-            "join resume | waiter task=#%d on task=#%d as task =#%d" t.t_id thread_id t'.t_id;
-          in
-          if thread_id < 0 || thread_id >= st.thread_counter then
-            invalid_arg (Printf.sprintf "unknown thread %d" thread_id)
-          else
-            match Tempo_thread.find_opt st.threads thread_id with
-            | None ->
-                dlog ~task:t.t_id "step.join"
-                  "join immediate | waiter task=#%d on completed thread=#%d"
-                  t.t_id thread_id;
-                continue k ()
-            | Some state ->
-                if state.completed && state.active = 0 then begin
-                  dlog ~task:t.t_id "step.join"
-                    "join immediate | waiter task=#%d on completed thread=#%d"
-                    t.t_id thread_id;
-                  continue k ()
-                end
-                else begin
-                  dlog ~task:t.t_id "step"
-                    "joint wait | task=#%d waiting for thread=#%d" t.t_id thread_id;
-                  mark_suspended st.threads parent_thread;
-                  add_join_waiter st.threads thread_id parent_thread parent_kill_ctx resume
-                end
     in
     let cleanup () =
       dispose_task st t

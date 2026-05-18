@@ -60,20 +60,19 @@ High-level reactive operators are available under `Tempo.Constructs`.
 
 These constructs are built on top of the seven fundamental primitives.
 
-- `present_then_else s then_ else_` — run `then_` if `s` is present in the current instant, otherwise run `else_` in the next instant.
 - `after_n n body` — wait `n` logical instants, then run `body`.
 - `every_n n body` — run `body` every `n` logical instants forever.
 - `timeout n ~on_timeout body` — run `body` under weak preemption, cancel it after `n` instants, then run `on_timeout`.
 - `cooldown n s body` — run `body` when `s` is observed, then ignore subsequent occurrences for `n` instants.
 - `supervise_until stop body` — alias for a weak preemption scope (`watch stop body`).
-- `pulse_n n` — create a unit signal that is emitted periodically every `n` instants.
 
 Example:
 
 ```ocaml
 open Tempo
 
-let heartbeat = Constructs.pulse_n 10
+let tick = new_signal ()
+let heartbeat () = Constructs.every_n 10 (fun () -> emit tick ())
 ```
 
 ---
@@ -84,8 +83,6 @@ A few helpers are built on top of the primitives and available under `Tempo.Cons
 
 - `loop f` — repeat `f` forever with a `pause` between iterations.
 - `idle` — a `pause`-forever process.
-- `control toggle proc` — start/stop `proc` each time `toggle` is emitted (starts stopped).
-- `alternate toggle proc_a proc_b` — run `proc_a` immediately, then switch between `proc_a` and `proc_b` on each `toggle` emission.
 
 ---
 

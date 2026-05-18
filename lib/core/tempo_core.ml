@@ -22,8 +22,6 @@ let await : type emit agg mode. (emit, agg, mode) signal_core -> agg =
 
 let await_immediate : 'a signal -> 'a = fun s -> perform (Await_immediate s)
 let pause : unit -> unit = fun () -> perform Pause
-let fork (proc : unit -> unit) : thread = perform (Fork proc)
-let join (thread_id : thread) : unit = perform (Join thread_id)
 
 let when_ (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
   perform (When (s, body))
@@ -31,27 +29,4 @@ let when_ (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
 let watch (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
   perform (Watch (s, body))
 
-let fork_join2 a b =
-  let t = fork b in
-  a ();
-  join t
-
-let parallel procs =
-  let rec spawn acc = function
-    | [] -> acc
-    | p :: ps -> spawn (fork p :: acc) ps
-  in
-  let rec join_all = function
-    | [] -> ()
-    | t :: ts ->
-        join t;
-        join_all ts
-  in
-  match procs with
-  | [] -> ()
-  | [ p ] -> p ()
-  | [ a; b ] -> fork_join2 a b
-  | p :: ps ->
-      let threads = spawn [] ps in
-      p ();
-      join_all threads
+let parallel procs = perform (Parallel procs)
