@@ -135,6 +135,8 @@ type scheduler_state = {
     current : task Queue.t
   ; mutable next_instant : task list
   ; mutable blocked : task list
+  ; mutable free_tasks : task list
+  ; mutable retired_tasks : task list
   ; mutable signals : any_signal list
   ; mutable thread_counter : int
   ; threads : thread_table

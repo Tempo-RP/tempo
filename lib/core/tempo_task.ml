@@ -254,15 +254,27 @@ let create_task ?parent st thread guards kill_ctx run =
   let t_id = st.debug.task_counter in
   st.debug.task_counter <- st.debug.task_counter + 1;
   let guard_meta = make_guard_meta ?parent guards in
-  {
-    t_id
-  ; guard_meta
-  ; kill_ctx
-  ; thread
-  ; run
-  ; queued = false
-  ; blocked = false
-  }
+  match st.free_tasks with
+  | t :: free_tasks ->
+      st.free_tasks <- free_tasks;
+      t.t_id <- t_id;
+      t.guard_meta <- guard_meta;
+      t.kill_ctx <- kill_ctx;
+      t.thread <- thread;
+      t.run <- run;
+      t.queued <- false;
+      t.blocked <- false;
+      t
+  | [] ->
+      {
+        t_id
+      ; guard_meta
+      ; kill_ctx
+      ; thread
+      ; run
+      ; queued = false
+      ; blocked = false
+      }
 
 let spawn_now ?parent st thread guards kill_ctx run =
   let t = create_task ?parent st thread guards kill_ctx run in
@@ -274,7 +286,14 @@ let spawn_next ?parent st thread guards kill_ctx run =
   enqueue_next st t;
   t
 
-let recycle_task (_st : scheduler_state) (_t : task) = ()
+let recycle_task (st : scheduler_state) (t : task) =
+  t.guard_meta <- None;
+  t.kill_ctx <- empty_kill_context;
+  t.thread <- -1;
+  t.run <- (fun () -> ());
+  t.queued <- false;
+  t.blocked <- false;
+  st.retired_tasks <- t :: st.retired_tasks
 
 let block_on_guards (st : scheduler_state) (t : task) =
   if not t.blocked then (

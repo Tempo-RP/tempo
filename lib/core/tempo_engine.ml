@@ -164,7 +164,7 @@ let make_snapshot (st : scheduler_state) (phase : snapshot_phase) =
   ; task_counter = st.debug.task_counter
   ; thread_counter = st.thread_counter
   ; signal_counter = st.debug.sig_counter
-  ; free_task_count = 0
+  ; free_task_count = List.length st.free_tasks + List.length st.retired_tasks
   ; gc_minor_words = gc.Gc.minor_words
   ; gc_promoted_words = gc.Gc.promoted_words
   ; gc_major_words = gc.Gc.major_words
@@ -548,6 +548,8 @@ let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
         end;
         let counter = if debug_enabled then Some (Mtime_clock.counter ()) else None in
         st.blocked <- [];
+        st.free_tasks <- List.rev_append st.retired_tasks st.free_tasks;
+        st.retired_tasks <- [];
         emit_snapshot on_snapshot st `Before_step;
         before_step ();
         step st;
@@ -621,6 +623,8 @@ let create_scheduler_state () =
   { current         = Queue.create ()
     ;next_instant    = []
     ;blocked         = []
+    ;free_tasks      = []
+    ;retired_tasks   = []
     ;signals         = []
     ;thread_counter  = 0
     ;debug           =
