@@ -363,12 +363,9 @@ let handle_task : scheduler_state -> task -> unit =
           (fun () ->
             body ();
             if parent_alive () then begin
-              let t' =
-                spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                  (fun () -> continue k ())
-              in
               dlog ~task:t.t_id "step"
-                "when exit | tasks=#%d -> task=#%d" t.t_id t'.t_id;
+                "when exit | task=#%d -> continue" t.t_id;
+              continue k ();
             end)
       in
       dlog ~task:guard_task.t_id ~signal:s.s_id "step"
