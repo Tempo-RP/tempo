@@ -57,19 +57,28 @@ let find (threads : thread_table) (thread : Tempo_types.thread) =
   | Some ts -> ts
   | None -> invalid_arg (Printf.sprintf "unknown thread %d" thread)
 
-let add_join_waiter (threads : thread_table) (thread : Tempo_types.thread)
-    (waiter_thread : Tempo_types.thread)
-    (kill_ctx : Tempo_types.kill_context) waiter =
+let add_join_waiter ?(cancel = fun () -> ()) ?(suspended_thread = true)
+    (threads : thread_table) (thread : Tempo_types.thread)
+    (waiter_thread : Tempo_types.thread) (kill_ctx : Tempo_types.kill_context)
+    waiter =
   match find_opt threads thread with
   | None ->
-      if kill_ctx_alive kill_ctx then waiter ()
+      if kill_ctx_alive kill_ctx then waiter () else cancel ()
   | Some state ->
       if state.Tempo_types.completed then (
-        if kill_ctx_alive kill_ctx then waiter ())
+        if kill_ctx_alive kill_ctx then waiter () else cancel ())
       else if kill_ctx_alive kill_ctx then
         state.Tempo_types.waiters <-
-          Tempo_types.{ resume = waiter; kill_ctx; thread = waiter_thread }
+          Tempo_types.
+            {
+              resume = waiter
+            ; cancel
+            ; kill_ctx
+            ; thread = waiter_thread
+            ; suspended_thread
+            }
           :: state.Tempo_types.waiters
+      else cancel ()
 
 let can_complete (state : thread_state) =
   state.Tempo_types.active = 0 && state.Tempo_types.suspended = 0
@@ -79,8 +88,8 @@ let rec release_waiters (threads : thread_table) (waiters : Tempo_types.join_wai
   match waiters with
   | [] -> ()
   | (w : Tempo_types.join_waiter) :: rest ->
-      mark_resumed threads w.thread;
-      if kill_ctx_alive w.kill_ctx then w.resume ();
+      if w.suspended_thread then mark_resumed threads w.thread;
+      if kill_ctx_alive w.kill_ctx then w.resume () else w.cancel ();
       release_waiters threads rest
 
 and complete_if_idle (threads : thread_table) (thread : Tempo_types.thread)
@@ -93,8 +102,8 @@ and complete_if_idle (threads : thread_table) (thread : Tempo_types.thread)
     match waiters with
     | [] -> ()
     | [ w ] ->
-        mark_resumed threads w.thread;
-        if kill_ctx_alive w.kill_ctx then w.resume ()
+        if w.suspended_thread then mark_resumed threads w.thread;
+        if kill_ctx_alive w.kill_ctx then w.resume () else w.cancel ()
     | _ ->
         (* Preserve FIFO semantics only when needed. *)
         release_waiters threads (List.rev waiters))
@@ -126,7 +135,8 @@ let prune_dead_join_waiters (threads : thread_table) current_kill_epoch =
               (fun acc (w : Tempo_types.join_waiter) ->
                 if kill_ctx_alive w.kill_ctx then w :: acc
                 else (
-                  mark_resumed threads w.thread;
+                  if w.suspended_thread then mark_resumed threads w.thread;
+                  w.cancel ();
                   acc))
               [] state.Tempo_types.waiters
             |> List.rev)

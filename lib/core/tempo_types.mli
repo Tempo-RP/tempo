@@ -40,8 +40,10 @@ type 'agg awaiter = {
 }
 type join_waiter = {
     resume : unit -> unit
+  ; cancel : unit -> unit
   ; kill_ctx : kill_context
   ; thread : thread
+  ; suspended_thread : bool
 }
 type kill_watcher = { kill : kill; kill_ctx : kill_context }
 

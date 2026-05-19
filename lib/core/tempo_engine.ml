@@ -414,13 +414,25 @@ let handle_task : scheduler_state -> task -> unit =
     in
     let handle_parallel : (unit -> unit) list -> (unit, unit) continuation -> unit =
      fun procs k ->
-      let resume () =
+      let current_task =
+        match st.running_task with
+        | Some task -> task
+        | None -> t
+      in
+      let resume_spawn () =
         let t' =
           spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
             (fun () -> continue k ())
         in
         dlog ~task:t.t_id "step.parallel"
           "parallel resume | parent task=#%d as task=#%d" t.t_id t'.t_id
+      in
+      let resume_stable () =
+        reset_task current_task parent_thread parent_guards parent_kill_ctx
+          (fun () -> continue k ());
+        enqueue_now st current_task;
+        dlog ~task:current_task.t_id "step.parallel"
+          "parallel resume | parent task=#%d" current_task.t_id
       in
       match procs with
       | [] -> continue k ()
@@ -436,9 +448,16 @@ let handle_task : scheduler_state -> task -> unit =
                 "parallel spawn | parent task=#%d thread=#%d child task=#%d"
                 t.t_id parallel_thread child.t_id)
             procs;
-          mark_suspended st.threads parent_thread;
-          add_join_waiter st.threads parallel_thread parent_thread
-            parent_kill_ctx resume
+          if current_task.thread = parent_thread then begin
+            current_task.retained <- true;
+            add_join_waiter ~cancel:(fun () -> dispose_task st current_task)
+              ~suspended_thread:false st.threads parallel_thread parent_thread
+              parent_kill_ctx resume_stable
+          end else begin
+            mark_suspended st.threads parent_thread;
+            add_join_waiter st.threads parallel_thread parent_thread
+              parent_kill_ctx resume_spawn
+          end
     in
     let handle_when : type emit agg mode.
         (emit, agg, mode) signal_core ->
