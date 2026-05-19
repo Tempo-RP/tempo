@@ -101,7 +101,11 @@ let task_guards_ok (t : task) =
   | Some gm ->
       if gm.guards_checked_epoch = !guard_epoch then gm.guards_ok_cached
       else
-        let ok = guards_ok_list gm.guards in
+        let ok =
+          match gm.guards with
+          | [ Any s ] -> s.present
+          | _ -> guards_ok_list gm.guards
+        in
         gm.guards_checked_epoch <- !guard_epoch;
         gm.guards_ok_cached <- ok;
         ok
@@ -201,6 +205,24 @@ let register_missing_guards (st : scheduler_state) (t : task)
       end)
     unique_missing;
   set_registered_missing_from_unique t unique_missing
+
+let register_single_missing_guard (st : scheduler_state) (t : task) (Any s) =
+  let gm = guard_meta_exn t in
+  if gm.guard_registration_instant <> st.debug.instant_counter then begin
+    gm.guard_registration_instant <- st.debug.instant_counter;
+    clear_registered_missing t
+  end;
+  if not (registered_missing_mem gm s.s_id) then begin
+    ensure_signal_tracked st s;
+    st.metrics.guard_waiter_registrations <-
+      st.metrics.guard_waiter_registrations + 1;
+    s.guard_waiters <- t :: s.guard_waiters
+  end;
+  (match gm.registered_missing with
+  | Missing_many tbl -> Hashtbl.reset tbl
+  | Missing_none | Missing_one _ -> ());
+  gm.pending_guards <- 1;
+  gm.registered_missing <- Missing_one s.s_id
 
 let infer_guard_cache parent guards =
   let epoch = !guard_epoch in
@@ -319,8 +341,11 @@ let block_on_guards (st : scheduler_state) (t : task) =
   | Some gm ->
       gm.guards_checked_epoch <- !guard_epoch;
       gm.guards_ok_cached <- false;
-      let miss = List.filter (fun (Any s) -> not s.present) gm.guards in
-      register_missing_guards st t miss
+      (match gm.guards with
+      | [ signal ] -> register_single_missing_guard st t signal
+      | _ ->
+          let miss = List.filter (fun (Any s) -> not s.present) gm.guards in
+          register_missing_guards st t miss)
 
 let block_on_guards_with_missing (st : scheduler_state) (t : task) miss =
   if not t.blocked then (
@@ -332,7 +357,9 @@ let block_on_guards_with_missing (st : scheduler_state) (t : task) miss =
   | Some gm ->
       gm.guards_checked_epoch <- !guard_epoch;
       gm.guards_ok_cached <- false;
-      register_missing_guards st t miss
+      (match gm.guards, miss with
+      | [ signal ], [ _ ] -> register_single_missing_guard st t signal
+      | _ -> register_missing_guards st t miss)
 
 let wake_guard_waiters st s =
   List.iter
