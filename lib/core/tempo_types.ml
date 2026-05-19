@@ -94,6 +94,13 @@ and task = {
   ; mutable generation : int
 }
 
+and task_worklist = {
+    mutable items : task option array
+  ; mutable head : int
+  ; mutable tail : int
+  ; mutable size : int
+}
+
 and any_signal = Any : ('emit, 'agg, 'mode) signal_core -> any_signal
 
 type 'a signal = ('a, 'a, event) signal_core
@@ -138,8 +145,8 @@ type runtime_metrics = {
 }
 
 type scheduler_state = {
-    current : task Queue.t
-  ; mutable next_instant : task list
+    current : task_worklist
+  ; next_instant : task_worklist
   ; mutable blocked : task list
   ; mutable free_tasks : task list
   ; mutable retired_tasks : task list

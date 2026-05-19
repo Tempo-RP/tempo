@@ -120,8 +120,8 @@ let fold_kill_context_stats (st : scheduler_state) =
     List.iter (fun (aw : _ awaiter) -> walk 0 aw.kill_ctx) s.awaiters;
     List.iter (fun (w : kill_watcher) -> walk 0 w.kill_ctx) s.kill_watchers
   in
-  Queue.iter walk_task st.current;
-  List.iter walk_task st.next_instant;
+  worklist_iter walk_task st.current;
+  worklist_iter walk_task st.next_instant;
   List.iter walk_task st.blocked;
   List.iter walk_signal st.signals;
   Array.iter
@@ -147,9 +147,9 @@ let make_snapshot (st : scheduler_state) (phase : snapshot_phase) =
     phase
   ; instant = st.debug.instant_counter
   ; step = st.debug.step_counter
-  ; current_q = Queue.length st.current
+  ; current_q = worklist_length st.current
   ; blocked_q = List.length st.blocked
-  ; next_q = List.length st.next_instant
+  ; next_q = worklist_length st.next_instant
   ; tracked_signals = List.length st.signals
   ; awaiters
   ; guard_waiters
@@ -681,12 +681,14 @@ let rec step : scheduler_state -> unit =
     if debug_enabled then begin
       Tempo_log.log_banner_step (ctx);
       Tempo_log.log_snapshot (ctx)
-        ~current:(Tempo_log.snapshot_queue st.current)
-        ~blocked:st.blocked ~next:st.next_instant ~signals:st.signals
+        ~current:(Tempo_log.snapshot_worklist st.current)
+        ~blocked:st.blocked
+        ~next:(Tempo_log.snapshot_worklist st.next_instant)
+        ~signals:st.signals
     end;
     st.debug.step_counter <- st.debug.step_counter + 1;
       let rec take_next () =
-        if Queue.is_empty st.current then 
+        if worklist_is_empty st.current then
           begin 
             Tempo_log.log ~level:Logs.Debug (ctx) "step"
               "queue empty | stop current instant";
@@ -694,7 +696,7 @@ let rec step : scheduler_state -> unit =
             None
           end
         else
-          let t = Queue.take st.current in
+          let t = worklist_take st.current in
           t.queued <- false;
           if task_kills_alive t then Some t
           else (
@@ -722,8 +724,10 @@ let rec step : scheduler_state -> unit =
           in
           if debug_enabled then
             Tempo_log.log_snapshot (ctx)
-              ~current:(Tempo_log.snapshot_queue st.current)
-              ~blocked:st.blocked ~next:st.next_instant ~signals:st.signals;
+              ~current:(Tempo_log.snapshot_worklist st.current)
+              ~blocked:st.blocked
+              ~next:(Tempo_log.snapshot_worklist st.next_instant)
+              ~signals:st.signals;
           record_step_metrics ();
           continue ()
 
@@ -738,8 +742,10 @@ let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
         if debug_enabled then begin
           Tempo_log.log_banner_instant (ctx) st.debug.instant_counter;
           Tempo_log.log_snapshot (ctx)
-            ~current:(Tempo_log.snapshot_queue st.current)
-            ~blocked:st.blocked ~next:st.next_instant ~signals:st.signals
+            ~current:(Tempo_log.snapshot_worklist st.current)
+            ~blocked:st.blocked
+            ~next:(Tempo_log.snapshot_worklist st.next_instant)
+            ~signals:st.signals
         end;
         let counter = if debug_enabled then Some (Mtime_clock.counter ()) else None in
         st.blocked <- [];
@@ -768,30 +774,29 @@ let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
           emit_snapshot on_snapshot st `After_finalize;
           st.debug.instant_counter <- st.debug.instant_counter + 1;
           st.debug.step_counter <- 0;
-          match st.next_instant with
-            | [] ->
-                if debug_enabled then
-                  Tempo_log.log ~level:Logs.Debug (ctx) "tasks"
-                    "no more tasks | for next instant -> stop"
-            | ts ->
-              let survivors =
-                List.filter
-                  (fun t ->
-                     if task_kills_alive t then true
-                    else (
-                      dispose_task st t;
-                      false))
-                  ts
-              in
+          if worklist_is_empty st.next_instant then begin
+              if debug_enabled then
+                Tempo_log.log ~level:Logs.Debug (ctx) "tasks"
+                  "no more tasks | for next instant -> stop"
+          end
+          else begin
+              let survivors = ref 0 in
+              worklist_iter_lifo
+                (fun t ->
+                  if task_kills_alive t then begin
+                    incr survivors;
+                    enqueue_now st t
+                  end else dispose_task st t)
+                st.next_instant;
+              worklist_clear st.next_instant;
               if debug_enabled then
                 Tempo_log.log (ctx) "instant"
                   "rollover tasks | moving %d tasks to next instant"
-                  (List.length survivors);
-              st.next_instant <- [];
-              List.iter (enqueue_now st) survivors;
+                  !survivors;
               emit_snapshot on_snapshot st `After_rollover;
               run_instant on_snapshot before_step after_step st
                 (Option.map pred remaining)
+          end
 
 let create_scheduler_state () = 
   let metrics =
@@ -815,8 +820,8 @@ let create_scheduler_state () =
       ; kill_watchers_pruned = 0
       }
   in
-  { current         = Queue.create ()
-    ;next_instant    = []
+  { current         = create_worklist ()
+    ;next_instant    = create_worklist ()
     ;blocked         = []
     ;free_tasks      = []
     ;retired_tasks   = []

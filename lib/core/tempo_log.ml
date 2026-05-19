@@ -147,8 +147,7 @@ module Tempo_log = struct
           pp_pair fmt lst
 
   (* --- Printers for runtime data structures ------------------------------- *)
-  let snapshot_queue q =
-    if Queue.is_empty q then [] else List.of_seq (Queue.to_seq q)
+  let snapshot_worklist q = Tempo_task.worklist_to_list q
 
   let default_sep fmt () = Format.fprintf fmt "; "
 

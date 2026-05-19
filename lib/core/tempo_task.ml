@@ -113,16 +113,86 @@ let task_guards_ok (t : task) =
 let task_kills_alive (t : task) =
   kill_context_alive t.kill_ctx
 
+let create_worklist ?(capacity = 64) () =
+  let capacity = max 1 capacity in
+  { items = Array.make capacity None; head = 0; tail = 0; size = 0 }
+
+let worklist_length q = q.size
+
+let worklist_is_empty q = q.size = 0
+
+let grow_worklist q =
+  let old_items = q.items in
+  let old_len = Array.length old_items in
+  let new_len = old_len * 2 in
+  let new_items = Array.make new_len None in
+  for i = 0 to q.size - 1 do
+    let old_idx = (q.head + i) mod old_len in
+    new_items.(i) <- old_items.(old_idx);
+    old_items.(old_idx) <- None
+  done;
+  q.items <- new_items;
+  q.head <- 0;
+  q.tail <- q.size
+
+let worklist_add q t =
+  if q.size = Array.length q.items then grow_worklist q;
+  q.items.(q.tail) <- Some t;
+  q.tail <- (q.tail + 1) mod Array.length q.items;
+  q.size <- q.size + 1
+
+let worklist_take q =
+  if q.size = 0 then raise Queue.Empty
+  else
+    let idx = q.head in
+    match q.items.(idx) with
+    | None -> assert false
+    | Some t ->
+        q.items.(idx) <- None;
+        q.head <- (q.head + 1) mod Array.length q.items;
+        q.size <- q.size - 1;
+        t
+
+let worklist_clear q =
+  let len = Array.length q.items in
+  for i = 0 to q.size - 1 do
+    q.items.((q.head + i) mod len) <- None
+  done;
+  q.head <- 0;
+  q.tail <- 0;
+  q.size <- 0
+
+let worklist_iter f q =
+  let len = Array.length q.items in
+  for i = 0 to q.size - 1 do
+    match q.items.((q.head + i) mod len) with
+    | None -> ()
+    | Some t -> f t
+  done
+
+let worklist_iter_lifo f q =
+  let len = Array.length q.items in
+  for i = q.size - 1 downto 0 do
+    match q.items.((q.head + i) mod len) with
+    | None -> ()
+    | Some t -> f t
+  done
+
+let worklist_to_list q =
+  let tasks = ref [] in
+  worklist_iter (fun t -> tasks := t :: !tasks) q;
+  List.rev !tasks
+
 let enqueue_now st t =
   if not t.queued then (
     t.queued <- true;
     t.blocked <- false;
     st.metrics.tasks_enqueued_now <- st.metrics.tasks_enqueued_now + 1;
-    Queue.add t st.current)
+    worklist_add st.current t)
 
 let enqueue_next st t =
   st.metrics.tasks_enqueued_next <- st.metrics.tasks_enqueued_next + 1;
-  st.next_instant <- t :: st.next_instant
+  worklist_add st.next_instant t
 
 let ensure_signal_tracked : type e a m.
     scheduler_state -> (e, a, m) signal_core -> unit =

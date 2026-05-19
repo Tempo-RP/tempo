@@ -35,6 +35,15 @@ val task_kills_alive : task -> bool
 val bump_kill_epoch : unit -> unit
 val current_kill_epoch : unit -> int
 val bump_guard_epoch : unit -> unit
+val create_worklist : ?capacity:int -> unit -> task_worklist
+val worklist_length : task_worklist -> int
+val worklist_is_empty : task_worklist -> bool
+val worklist_add : task_worklist -> task -> unit
+val worklist_take : task_worklist -> task
+val worklist_clear : task_worklist -> unit
+val worklist_iter : (task -> unit) -> task_worklist -> unit
+val worklist_iter_lifo : (task -> unit) -> task_worklist -> unit
+val worklist_to_list : task_worklist -> task list
 val enqueue_now : scheduler_state -> task -> unit
 val enqueue_next : scheduler_state -> task -> unit
 val ensure_signal_tracked : scheduler_state -> ('e, 'a, 'm) signal_core -> unit
