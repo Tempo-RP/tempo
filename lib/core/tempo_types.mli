@@ -47,9 +47,13 @@ type join_waiter = {
 }
 type kill_watcher = { kill : kill; kill_ctx : kill_context }
 
+type signal_tracking =
+  | Signal_untracked
+  | Signal_tracked
+
 type ('emit, 'agg, 'mode) signal_core = {
     s_id : int
-  ; mutable tracked : bool
+  ; mutable tracking : signal_tracking
   ; mutable present : bool
   ; mutable value : 'agg option
   ; mutable awaiters : 'agg awaiter list

@@ -197,11 +197,12 @@ let enqueue_next st t =
 let ensure_signal_tracked : type e a m.
     scheduler_state -> (e, a, m) signal_core -> unit =
  fun st s ->
-  if not s.tracked then begin
-    s.tracked <- true;
-    st.metrics.signals_tracked <- st.metrics.signals_tracked + 1;
-    st.signals <- Any s :: st.signals
-  end
+  match s.tracking with
+  | Signal_tracked -> ()
+  | Signal_untracked ->
+      s.tracking <- Signal_tracked;
+      st.metrics.signals_tracked <- st.metrics.signals_tracked + 1;
+      st.signals <- Any s :: st.signals
 
 let guard_meta_exn (t : task) =
   match t.guard_meta with

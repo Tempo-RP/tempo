@@ -29,7 +29,7 @@ let fresh_event_signal (st : Tempo_types.scheduler_state) :
     Tempo_types.
       {
         s_id = fresh_signal_id st
-      ; tracked = false
+      ; tracking = Signal_untracked
       ; present = false
       ; value = None
       ; awaiters = []
@@ -49,7 +49,7 @@ let fresh_aggregate_signal (st : Tempo_types.scheduler_state) ~initial ~combine
     Tempo_types.
       {
         s_id = fresh_signal_id st
-      ; tracked = false
+      ; tracking = Signal_untracked
       ; present = false
       ; value = None
       ; awaiters = []
@@ -259,9 +259,11 @@ let finalize_signals (st : Tempo_types.scheduler_state) =
       s.guard_waiters <- [];
       if s.awaiters <> [] || s.kill_watchers <> [] then kept_rev := any :: !kept_rev
       else begin
-        if s.tracked then
-          st.metrics.signals_untracked <- st.metrics.signals_untracked + 1;
-        s.tracked <- false
+        (match s.tracking with
+        | Signal_tracked ->
+            st.metrics.signals_untracked <- st.metrics.signals_untracked + 1
+        | Signal_untracked -> ());
+        s.tracking <- Signal_untracked
       end)
     st.signals;
   st.signals <- List.rev !kept_rev
