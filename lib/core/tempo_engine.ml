@@ -515,27 +515,60 @@ let handle_task : scheduler_state -> task -> unit =
       if s.present then
         continue k ()
       else if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
-        let elided_body () =
+        let current_task =
+          match st.running_task with
+          | Some task -> task
+          | None -> t
+        in
+        let resume_spawn () =
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              (fun () -> continue k ())
+          in
+          dlog ~task:t.t_id "step"
+            "watch elided exit (normal) | task=#%d -> task=#%d"
+            t.t_id t'.t_id
+        in
+        let resume_stable () =
+          match st.running_task with
+          | Some task when task.thread = parent_thread ->
+              task.retained <- true;
+              reset_task ~parent:task task parent_thread parent_guards
+                parent_kill_ctx
+                (fun () -> continue k ());
+              enqueue_now st task;
+              dlog ~task:task.t_id "step"
+                "watch elided exit (normal) | task=#%d" task.t_id
+          | _ -> resume_spawn ()
+        in
+        let elided_body resume =
           body ();
-          if parent_alive () then begin
-            let t' =
-              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                (fun () -> continue k ())
-            in
-            dlog ~task:t.t_id "step"
-              "watch elided exit (normal) | task=#%d -> task=#%d"
-              t.t_id t'.t_id
-          end
+          if parent_alive () then resume ()
         in
-        let t' =
-          spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-            elided_body
-        in
-        dlog ~task:t.t_id ~signal:s.s_id "step"
-          "watch elided (ancestor already watches signal) | task=#%d signal=#%d -> task=#%d"
-          t.t_id s.s_id t'.t_id
+        if current_task.thread = parent_thread then begin
+          current_task.retained <- true;
+          reset_task ~parent:current_task current_task parent_thread parent_guards
+            parent_kill_ctx
+            (fun () -> elided_body resume_stable);
+          enqueue_now st current_task;
+          dlog ~task:current_task.t_id ~signal:s.s_id "step"
+            "watch elided (ancestor already watches signal) | task=#%d signal=#%d"
+            current_task.t_id s.s_id
+        end else
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              (fun () -> elided_body resume_spawn)
+          in
+          dlog ~task:t.t_id ~signal:s.s_id "step"
+            "watch elided (ancestor already watches signal) | task=#%d signal=#%d -> task=#%d"
+            t.t_id s.s_id t'.t_id
       end
       else
+        let current_task =
+          match st.running_task with
+          | Some task -> task
+          | None -> t
+        in
         let kk = Tempo_low_level.new_kill () in
         let resumed = ref false in
         let resume_next () =
@@ -564,20 +597,48 @@ let handle_task : scheduler_state -> task -> unit =
               "watch exit (normal) | task=#%d -> task=#%d" t.t_id t'.t_id
           end
         in
+        let resume_now_stable () =
+          if not !resumed then begin
+            resumed := true;
+            kk.alive := false;
+            kk.cleanup <- None;
+            match st.running_task with
+            | Some task when task.thread = parent_thread ->
+                task.retained <- true;
+                reset_task ~parent:task task parent_thread parent_guards
+                  parent_kill_ctx
+                  (fun () -> continue k ());
+                enqueue_now st task;
+                dlog ~task:task.t_id "step"
+                  "watch exit (normal) | task=#%d" task.t_id
+            | _ -> resume_now ()
+          end
+        in
         kk.cleanup <- Some resume_next;
         register_kill_watcher st s kk parent_kill_ctx;
-        let guarded_body () =
+        let guarded_body resume =
           body ();
-          resume_now ()
+          resume ()
         in
-        let t' =
-          spawn_now ~parent:t st parent_thread parent_guards
-            (push_kill_context ~watch_signal_id:s.s_id kk parent_kill_ctx)
-            guarded_body
+        let body_kill_ctx =
+          push_kill_context ~watch_signal_id:s.s_id kk parent_kill_ctx
         in
-        dlog ~task:t.t_id ~signal:s.s_id "step"
-          "watch enter | task=#%d signal=#%d -> task=#%d"
-          t.t_id s.s_id t'.t_id
+        if current_task.thread = parent_thread then begin
+          current_task.retained <- true;
+          reset_task ~parent:current_task current_task parent_thread parent_guards
+            body_kill_ctx
+            (fun () -> guarded_body resume_now_stable);
+          enqueue_now st current_task;
+          dlog ~task:current_task.t_id ~signal:s.s_id "step"
+            "watch enter | task=#%d signal=#%d" current_task.t_id s.s_id
+        end else
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards body_kill_ctx
+              (fun () -> guarded_body resume_now)
+          in
+          dlog ~task:t.t_id ~signal:s.s_id "step"
+            "watch enter | task=#%d signal=#%d -> task=#%d"
+            t.t_id s.s_id t'.t_id
     in
     let run_task () =
       match t.run () with
