@@ -12,6 +12,10 @@ let effective_preemption_depth n = max 1 n
 let effective_multi_rounds n =
   let n = max 2 n in
   max 2 (int_of_float (log (float_of_int n) /. log 2.))
+let effective_supervision_sensors n = max 1 n
+let effective_supervision_rounds n =
+  let n = max 2 n in
+  max 8 (2 * int_of_float (log (float_of_int n) /. log 2.))
 
 let instants_for bench n =
   match bench with
@@ -20,6 +24,7 @@ let instants_for bench n =
   | "fork_explosion" -> effective_fork_depth n
   | "guarded_cascades_multi" -> effective_multi_rounds n
   | "nested_preemption" -> 2
+  | "reactive_supervision" -> (2 * effective_supervision_rounds n) + 1
   | _ -> 1
 
 let parse_args () =
@@ -30,27 +35,20 @@ let parse_args () =
   ] in
   Arg.parse specs (fun _ -> ()) "rml_bench --benchmark <name> --size <n> --run <k>"
 
-let process link s_in s_out =
-  await immediate s_in;
-  emit s_out
-
-let rec process chain n s_in s_out =
-  if n <= 0 then
-    emit s_out
-  else
-    signal mid in
-    run (link s_in mid)
-    ||
-    run (chain (n - 1) mid s_out)
+let process link signals i =
+  await immediate signals.(i);
+  emit signals.(i + 1)
 
 let process bench_propagation n =
   let n = effective_propagation n in
-  signal start_sig, end_sig in
-  run (chain n start_sig end_sig)
+  let signals = Array.init (n + 1) (fun _ -> signal s in s) in
+  for i = 0 to n - 1 dopar
+    run (link signals i)
+  done
   ||
-  await immediate end_sig
+  await immediate signals.(n)
   ||
-  emit start_sig
+  emit signals.(0)
 
 let rec process repeat_propagation rounds n =
   if rounds <= 0 then ()
@@ -94,26 +92,30 @@ let rec process fork_tree depth =
 let process bench_fork n =
   run (fork_tree (effective_fork_depth n))
 
-let rec process guarded depth done_sig =
-  if depth <= 0 then
+let rec process guarded guards i done_sig =
+  if i >= Array.length guards then
     emit done_sig
   else
-    signal guard in
-    (
-      do
-        run (guarded (depth - 1) done_sig)
-      when guard
-      done
-      ||
-      emit guard
-    )
+    do
+      run (guarded guards (i + 1) done_sig)
+    when guards.(i)
+    done
+
+let rec process emit_many guards i =
+  if i >= Array.length guards then ()
+  else (
+    emit guards.(i);
+    run (emit_many guards (i + 1)))
 
 let process bench_guarded n =
   let depth = effective_guard_depth n in
+  let guards = Array.init depth (fun _ -> signal guard in guard) in
   signal done_sig in
-  run (guarded depth done_sig)
+  run (guarded guards 0 done_sig)
   ||
   await immediate done_sig
+  ||
+  run (emit_many guards 0)
 
 let rec process repeat_guarded rounds n =
   if rounds <= 0 then ()
@@ -160,6 +162,113 @@ let process bench_preemption n =
   ||
   run (killer cancel_even)
 
+let sensor_value id round =
+  ((id + 1) * (round + 3) + (id mod 7)) mod 97
+
+let score_readings readings =
+  List.fold_left
+    (fun acc (id, round, value) -> acc + ((id + 1) * value) + round)
+    0 readings
+
+let process sensor id rounds tick ready readings observed =
+  for round = 0 to rounds - 1 do
+    await immediate tick;
+    do
+      emit readings (id, round, sensor_value id round);
+      incr observed
+    when ready
+    done;
+    pause
+  done
+
+let rec process sensors_loop id count rounds tick ready readings observed =
+  if id >= count then ()
+  else
+    (run (sensor id rounds tick ready readings observed)
+     ||
+     run (sensors_loop (id + 1) count rounds tick ready readings observed))
+
+let rec process supervisor round rounds tick ready readings alert total =
+  if round >= rounds then ()
+  else (
+    emit ready;
+    emit tick;
+    await readings(batch) in
+    let score = score_readings batch in
+    total := !total + score;
+    emit alert score;
+    pause;
+    run (supervisor (round + 1) rounds tick ready readings alert total))
+
+let process actuator_step alert total count =
+  await alert(score) in
+  total := !total + score;
+  incr count
+
+let rec process actuator remaining alert total count =
+  if remaining <= 0 then ()
+  else
+    (run (actuator_step alert total count);
+     run (actuator (remaining - 1) alert total count))
+
+let rec process resetter round rounds reset =
+  if round >= rounds then ()
+  else (
+    pause;
+    if round > 0 && round mod 5 = 0 then emit reset;
+    run (resetter (round + 1) rounds reset))
+
+let rec process maintenance round rounds reset =
+  if round >= rounds then ()
+  else
+    (do
+       pause;
+       pause
+     until reset
+     done;
+     run (maintenance (round + 1) rounds reset))
+
+let process bench_supervision n =
+  let sensor_count = effective_supervision_sensors n in
+  let rounds = effective_supervision_rounds n in
+  let observed = ref 0 in
+  let supervisor_total = ref 0 in
+  let actuator_total = ref 0 in
+  let alert_count = ref 0 in
+  signal tick, ready, reset in
+  signal alert default 0 gather fun score _ -> score in
+  signal readings default [] gather fun reading acc -> reading :: acc in
+  run (supervisor 0 rounds tick ready readings alert supervisor_total)
+  ||
+  run (actuator rounds alert actuator_total alert_count)
+  ||
+  run (resetter 0 rounds reset)
+  ||
+  run (maintenance 0 rounds reset)
+  ||
+  run (sensors_loop 0 sensor_count rounds tick ready readings observed);
+  let expected_sensor_events = sensor_count * rounds in
+  if !observed <> expected_sensor_events then
+    failwith
+      ("supervision sensor mismatch: expected "
+       ^ string_of_int expected_sensor_events
+       ^ " got "
+       ^ string_of_int !observed);
+  if !alert_count < max 1 (rounds - 1) then
+    failwith
+      ("supervision alert mismatch: expected at least "
+       ^ string_of_int (max 1 (rounds - 1))
+       ^ " got "
+       ^ string_of_int !alert_count);
+  if !actuator_total <= 0 then
+    failwith
+      ("supervision actuator total mismatch: "
+       ^ string_of_int !actuator_total);
+  if !supervisor_total <= 0 then
+    failwith
+      ("supervision supervisor total mismatch: "
+       ^ string_of_int !supervisor_total)
+
 let process selected =
   match !benchmark with
   | "propagation_chains" -> run (bench_propagation !size)
@@ -169,6 +278,7 @@ let process selected =
   | "guarded_cascades" -> run (bench_guarded !size)
   | "guarded_cascades_multi" -> run (bench_guarded_multi !size)
   | "nested_preemption" -> run (bench_preemption !size)
+  | "reactive_supervision" -> run (bench_supervision !size)
   | x -> invalid_arg ("unknown benchmark: " ^ x)
 
 let peak_mb () =

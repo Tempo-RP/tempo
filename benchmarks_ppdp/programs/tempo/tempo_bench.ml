@@ -33,6 +33,10 @@ let effective_preemption_depth n = max 1 n
 let effective_multi_rounds n =
   let n = max 2 n in
   max 2 (int_of_float (log (float_of_int n) /. log 2.))
+let effective_supervision_sensors n = max 1 n
+let effective_supervision_rounds n =
+  let n = max 2 n in
+  max 8 (2 * int_of_float (log (float_of_int n) /. log 2.))
 
 let instants_for bench n =
   match bench with
@@ -41,62 +45,32 @@ let instants_for bench n =
   | "fork_explosion" -> effective_fork_depth n
   | "guarded_cascades_multi" -> effective_multi_rounds n
   | "nested_preemption" -> 2
+  | "reactive_supervision" -> (2 * effective_supervision_rounds n) + 1
   | _ -> 1
 
 let bench_propagation_chains n =
   let n = effective_propagation n in
-  let link s_in s_out () =
-    ignore (await_immediate s_in);
-    emit s_out ()
-  in
-  let rec chain depth s_in s_out () =
-    if depth <= 0 then
-      emit s_out ()
-    else
-      let mid = new_signal () in
-      parallel [ link s_in mid; chain (depth - 1) mid s_out ]
-  in
-  let start_sig = new_signal () in
-  let end_sig = new_signal () in
+  let signals = Array.init (n + 1) (fun _ -> new_signal ()) in
   let reached_end = ref false in
-  let starter () = emit start_sig () in
+  let starter () = emit signals.(0) () in
   let sink () =
-    ignore (await_immediate end_sig);
+    ignore (await_immediate signals.(n));
     reached_end := true
   in
-  parallel [ chain n start_sig end_sig; sink; starter ];
+  let workers =
+    List.init n (fun i () ->
+        ignore (await_immediate signals.(i));
+        emit signals.(i + 1) ())
+  in
+  parallel (starter :: sink :: workers);
   if not !reached_end then failwith "propagation chain did not reach end"
 
 let bench_propagation_chains_multi n =
   let rounds = effective_multi_rounds n in
-  let n = effective_propagation n in
-  let link s_in s_out () =
-    ignore (await_immediate s_in);
-    emit s_out ()
-  in
-  let rec chain depth s_in s_out () =
-    if depth <= 0 then
-      emit s_out ()
-    else
-      let mid = new_signal () in
-      parallel [ link s_in mid; chain (depth - 1) mid s_out ]
-  in
-  let one_round () =
-    let start_sig = new_signal () in
-    let end_sig = new_signal () in
-    let reached_end = ref false in
-    let starter () = emit start_sig () in
-    let sink () =
-      ignore (await_immediate end_sig);
-      reached_end := true
-    in
-    parallel [ chain n start_sig end_sig; sink; starter ];
-    if not !reached_end then failwith "propagation chain did not reach end"
-  in
   let rec loop i () =
     if i <= 0 then ()
     else (
-      one_round ();
+      bench_propagation_chains n;
       if i > 1 then (
         pause ();
         loop (i - 1) ()))
@@ -201,6 +175,94 @@ let bench_nested_preemption n =
   parallel [ body; driver ];
   if not !completed then failwith "nested preemption did not terminate"
 
+let sensor_value id round = ((id + 1) * (round + 3) + (id mod 7)) mod 97
+
+let score_readings readings =
+  List.fold_left
+    (fun acc (id, round, value) -> acc + ((id + 1) * value) + round)
+    0 readings
+
+let bench_reactive_supervision n =
+  let sensors = effective_supervision_sensors n in
+  let rounds = effective_supervision_rounds n in
+  let tick = new_signal () in
+  let ready = new_signal () in
+  let reset = new_signal () in
+  let alert = new_signal_agg ~initial:0 ~combine:(fun _ score -> score) in
+  let readings =
+    new_signal_agg ~initial:[] ~combine:(fun acc reading -> reading :: acc)
+  in
+  let expected_sensor_events = sensors * rounds in
+  let observed_sensor_events = ref 0 in
+  let supervisor_total = ref 0 in
+  let actuator_total = ref 0 in
+  let alert_count = ref 0 in
+  let rec sensor id round () =
+    if round >= rounds then ()
+    else (
+      ignore (await_immediate tick);
+      when_ ready (fun () ->
+          emit readings (id, round, sensor_value id round);
+          incr observed_sensor_events);
+      pause ();
+      sensor id (round + 1) ())
+  in
+  let rec supervisor round () =
+    if round >= rounds then ()
+    else (
+      emit ready ();
+      emit tick ();
+      let batch = await readings in
+      let score = score_readings batch in
+      supervisor_total := !supervisor_total + score;
+      emit alert score;
+      pause ();
+      supervisor (round + 1) ())
+  in
+  let rec actuator remaining () =
+    if remaining <= 0 then ()
+    else (
+      let score = await alert in
+      actuator_total := !actuator_total + score;
+      incr alert_count;
+      actuator (remaining - 1) ())
+  in
+  let rec resetter round () =
+    if round >= rounds then ()
+    else (
+      pause ();
+      if round > 0 && round mod 5 = 0 then emit reset ();
+      resetter (round + 1) ())
+  in
+  let rec maintenance round () =
+    if round >= rounds then ()
+    else (
+      watch reset (fun () ->
+          pause ();
+          pause ());
+      maintenance (round + 1) ())
+  in
+  let sensor_tasks = List.init sensors (fun id -> sensor id 0) in
+  parallel
+    (supervisor 0
+    :: actuator rounds
+    :: resetter 0
+    :: maintenance 0
+    :: sensor_tasks);
+  if !observed_sensor_events <> expected_sensor_events then
+    failwith
+      (Printf.sprintf "supervision sensor mismatch: expected %d got %d"
+         expected_sensor_events !observed_sensor_events);
+  if !alert_count < max 1 (rounds - 1) then
+    failwith
+      (Printf.sprintf "supervision alert mismatch: expected at least %d got %d"
+         (max 1 (rounds - 1))
+         !alert_count);
+  if !actuator_total <= 0 || !supervisor_total <= 0 then
+    failwith
+      (Printf.sprintf "supervision total mismatch: supervisor %d actuator %d"
+         !supervisor_total !actuator_total)
+
 let run_selected bench n =
   match bench with
   | "propagation_chains" -> bench_propagation_chains n
@@ -210,6 +272,7 @@ let run_selected bench n =
   | "guarded_cascades" -> bench_guarded_cascades n
   | "guarded_cascades_multi" -> bench_guarded_cascades_multi n
   | "nested_preemption" -> bench_nested_preemption n
+  | "reactive_supervision" -> bench_reactive_supervision n
   | x -> invalid_arg ("unknown benchmark: " ^ x)
 
 let peak_mb () =

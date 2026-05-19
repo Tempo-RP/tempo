@@ -216,7 +216,109 @@ let handle_task : scheduler_state -> task -> unit =
         Tempo_log.log ?task ?signal (ctx) scope fmt
       else Format.ifprintf Format.std_formatter fmt
     in
-    let handle_parallel procs k =
+    let handle_done () =
+      dlog ~task:t.t_id "step" "task done | task=#%d thread=#%d" t.t_id t.thread
+    in
+    let handle_new_signal : type a.
+        ((a, a, event) signal_core, unit) continuation -> unit =
+     fun k ->
+      let s = fresh_event_signal st in
+      dlog ~task:t.t_id ~signal:s.s_id "step"
+        "create event signal | task=#%d | signal=#%d" t.t_id s.s_id;
+      continue k s
+    in
+    let handle_new_signal_agg : type emit agg.
+        agg ->
+        (agg -> emit -> agg) ->
+        ((emit, agg, aggregate) signal_core, unit) continuation ->
+        unit =
+     fun initial combine k ->
+      let s = fresh_aggregate_signal st ~initial ~combine in
+      dlog ~task:t.t_id ~signal:s.s_id "step"
+        "create aggregate signal | task=#%d signal=#%d" t.t_id s.s_id;
+      continue k s
+    in
+    let handle_emit : type emit agg mode.
+        (emit, agg, mode) signal_core ->
+        emit ->
+        (unit, unit) continuation ->
+        unit =
+     fun s v k ->
+      dlog ~task:t.t_id ~signal:s.s_id "step"
+        "emit | task=#%d signal=#%d" t.t_id s.s_id;
+      update_signal st s v;
+      continue k ()
+    in
+    let handle_await : type emit agg mode.
+        (emit, agg, mode) signal_core -> (agg, unit) continuation -> unit =
+     fun s k ->
+      let resume v =
+        let new_task =
+          spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
+            (fun () -> continue k v)
+        in
+        dlog ~task:new_task.t_id ~signal:s.s_id "step"
+          "resume await | task=#%d -> task=#%d signal=#%d"
+          t.t_id new_task.t_id s.s_id
+      in
+      if s.present then
+        match s.kind with
+        | Event_signal ->
+            dlog ~task:t.t_id ~signal:s.s_id "step"
+              "await present | task=#%d signal=#%d -> resume next instant"
+              t.t_id s.s_id;
+            resume (Option.get s.value)
+        | Aggregate_signal _ ->
+            mark_suspended st.threads parent_thread;
+            register_awaiter st s
+              { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
+      else begin
+        dlog ~task:t.t_id ~signal:s.s_id "step"
+          "await absent | task=#%d signal`#%d -> enqueue" t.t_id s.s_id;
+        mark_suspended st.threads parent_thread;
+        register_awaiter st s
+          { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
+      end
+    in
+    let handle_await_immediate : type a.
+        (a, a, event) signal_core -> (a, unit) continuation -> unit =
+     fun s k ->
+      if s.present then
+        match s.value with
+        | Some v ->
+            dlog ~task:t.t_id ~signal:s.s_id "step"
+              "await_immediate present | task=#%d signal`#%d -> resume now"
+              t.t_id s.s_id;
+            continue k v
+        | None -> failwith "Error : present but no value"
+      else
+        let resume v =
+          let new_task =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              (fun () -> continue k v)
+          in
+          dlog ~task:t.t_id ~signal:s.s_id "step"
+            "resume await imm | task=#%d -> task=#%d signal`#%d"
+            t.t_id new_task.t_id s.s_id
+        in
+        dlog ~task:t.t_id ~signal:s.s_id "step"
+          "await immediate absent | task=#%d signal`#%d -> save continuation"
+          t.t_id s.s_id;
+        mark_suspended st.threads parent_thread;
+        register_awaiter st s
+          { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
+    in
+    let handle_pause : (unit, unit) continuation -> unit =
+     fun k ->
+      let new_task =
+        spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
+          (fun () -> continue k ())
+      in
+      dlog ~task:new_task.t_id "step"
+        "pause | task=#%d resume next instant as task #%d" t.t_id new_task.t_id
+    in
+    let handle_parallel : (unit -> unit) list -> (unit, unit) continuation -> unit =
+     fun procs k ->
       let resume () =
         let t' =
           spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
@@ -243,181 +345,127 @@ let handle_task : scheduler_state -> task -> unit =
           add_join_waiter st.threads parallel_thread parent_thread
             parent_kill_ctx resume
     in
+    let handle_when : type emit agg mode.
+        (emit, agg, mode) signal_core ->
+        (unit -> unit) ->
+        (unit, unit) continuation ->
+        unit =
+     fun s body k ->
+      (* Safety invariant for [when_]:
+         - never execute [body] inline in this handler frame because [body]
+           can perform effects (await/pause/when_) that must be handled by
+           the scheduler task trampoline;
+         - always keep [s] in the spawned task guard set, even if [s] is
+           already present, so continuations after pause/await stay guarded
+           in later instants. *)
+      let guard_task =
+        spawn_now ~parent:t st parent_thread (Any s :: parent_guards) parent_kill_ctx
+          (fun () ->
+            body ();
+            if parent_alive () then begin
+              let t' =
+                spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+                  (fun () -> continue k ())
+              in
+              dlog ~task:t.t_id "step"
+                "when exit | tasks=#%d -> task=#%d" t.t_id t'.t_id;
+            end)
+      in
+      dlog ~task:guard_task.t_id ~signal:s.s_id "step"
+        "when enter | task=#%d signal=#%d -> schedule task=#%d"
+        t.t_id s.s_id guard_task.t_id
+    in
+    let handle_watch : type emit agg mode.
+        (emit, agg, mode) signal_core ->
+        (unit -> unit) ->
+        (unit, unit) continuation ->
+        unit =
+     fun s body k ->
+      if s.present then
+        continue k ()
+      else if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
+        let elided_body () =
+          body ();
+          if parent_alive () then begin
+            let t' =
+              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+                (fun () -> continue k ())
+            in
+            dlog ~task:t.t_id "step"
+              "watch elided exit (normal) | task=#%d -> task=#%d"
+              t.t_id t'.t_id
+          end
+        in
+        let t' =
+          spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+            elided_body
+        in
+        dlog ~task:t.t_id ~signal:s.s_id "step"
+          "watch elided (ancestor already watches signal) | task=#%d signal=#%d -> task=#%d"
+          t.t_id s.s_id t'.t_id
+      end
+      else
+        let kk = Tempo_low_level.new_kill () in
+        let resumed = ref false in
+        let resume_next () =
+          if not !resumed then begin
+            resumed := true;
+            kk.alive := false;
+            kk.cleanup <- None;
+            let t' =
+              spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
+                (fun () -> continue k ())
+            in
+            dlog ~task:t.t_id "step"
+              "watch exit (killed) | task=#%d -> task=#%d" t.t_id t'.t_id
+          end
+        in
+        let resume_now () =
+          if not !resumed then begin
+            resumed := true;
+            kk.alive := false;
+            kk.cleanup <- None;
+            let t' =
+              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+                (fun () -> continue k ())
+            in
+            dlog ~task:t.t_id "step"
+              "watch exit (normal) | task=#%d -> task=#%d" t.t_id t'.t_id
+          end
+        in
+        kk.cleanup <- Some resume_next;
+        register_kill_watcher st s kk parent_kill_ctx;
+        let guarded_body () =
+          body ();
+          resume_now ()
+        in
+        let t' =
+          spawn_now ~parent:t st parent_thread parent_guards
+            (push_kill_context ~watch_signal_id:s.s_id kk parent_kill_ctx)
+            guarded_body
+        in
+        dlog ~task:t.t_id ~signal:s.s_id "step"
+          "watch enter | task=#%d signal=#%d -> task=#%d"
+          t.t_id s.s_id t'.t_id
+    in
     let run_task () =
       match t.run () with
       (* Task termination *)
-      | () -> dlog ~task:t.t_id "step" "task done | task=#%d thread=#%d" t.t_id t.thread
+      | () -> handle_done ()
       (* Signal allocation and emission *)
-      | effect (New_signal ()), k ->
-          let s = fresh_event_signal st in
-          dlog ~task:t.t_id ~signal:s.s_id "step"
-            "create event signal | task=#%d | signal=#%d" t.t_id s.s_id;
-          continue k s
+      | effect (New_signal ()), k -> handle_new_signal k
       | effect (New_signal_agg (initial, combine)), k ->
-          let s = fresh_aggregate_signal st ~initial ~combine in
-          dlog ~task:t.t_id ~signal:s.s_id "step"
-            "create aggregate signal | task=#%d signal=#%d" t.t_id s.s_id;
-          continue k s
-      | effect (Emit (s, v)), k ->
-          dlog ~task:t.t_id ~signal:s.s_id "step"
-            "emit | task=#%d signal=#%d" t.t_id s.s_id;
-          update_signal st s v;
-          continue k ()
+          handle_new_signal_agg initial combine k
+      | effect (Emit (s, v)), k -> handle_emit s v k
       (* Suspension / resumption on signals *)
-      | effect (Await s), k ->
-          let resume v =
-            let new_task =
-              spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
-                (fun () -> continue k v)
-            in
-            dlog ~task:new_task.t_id ~signal:s.s_id "step"
-              "resume await | task=#%d -> task=#%d signal=#%d"
-              t.t_id new_task.t_id s.s_id
-          in
-          if s.present then
-            match s.kind with
-            | Event_signal ->
-                dlog ~task:t.t_id ~signal:s.s_id "step"
-                  "await present | task=#%d signal=#%d -> resume next instant"
-                  t.t_id s.s_id;
-                resume (Option.get s.value)
-            | Aggregate_signal _ ->
-                mark_suspended st.threads parent_thread;
-                register_awaiter st s
-                  { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
-          else begin
-            dlog ~task:t.t_id ~signal:s.s_id "step"
-              "await absent | task=#%d signal`#%d -> enqueue" t.t_id s.s_id;
-            mark_suspended st.threads parent_thread;
-            register_awaiter st s
-              { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
-          end;
-      | effect (Await_immediate s), k ->
-          if s.present then
-            match s.value with
-            | Some v ->
-                dlog ~task:t.t_id ~signal:s.s_id "step"
-                  "await_immediate present | task=#%d signal`#%d -> resume now"
-                  t.t_id s.s_id;
-                continue k v;
-            | None -> failwith "Error : present but no value"
-          else
-            let resume v =
-              let new_task =
-                spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                  (fun () -> continue k v)
-              in
-              dlog ~task:t.t_id ~signal:s.s_id "step"
-                "resume await imm | task=#%d -> task=#%d signal`#%d"
-                t.t_id new_task.t_id s.s_id
-            in
-            dlog ~task:t.t_id ~signal:s.s_id "step"
-              "await immediate absent | task=#%d signal`#%d -> save continuation"
-              t.t_id s.s_id;
-            mark_suspended st.threads parent_thread;
-            register_awaiter st s
-              { resume; kill_ctx = parent_kill_ctx; thread = parent_thread };
+      | effect (Await s), k -> handle_await s k
+      | effect (Await_immediate s), k -> handle_await_immediate s k
       (* Scheduling and thread control *)
-      | effect Pause, k ->
-          let new_task =
-            spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
-              (fun () -> continue k ())
-          in
-          dlog ~task:new_task.t_id "step"
-            "pause | task=#%d resume next instant as task #%d" t.t_id new_task.t_id;
-      | effect (Parallel procs), k -> handle_parallel procs k;
+      | effect Pause, k -> handle_pause k
+      | effect (Parallel procs), k -> handle_parallel procs k
       (* Guarded and preemptive control operators *)
-      | effect (When (s, body)), k ->
-          (* Safety invariant for [when_]:
-             - never execute [body] inline in this handler frame because [body]
-               can perform effects (await/pause/when_) that must be handled by
-               the scheduler task trampoline;
-             - always keep [s] in the spawned task guard set, even if [s] is
-               already present, so continuations after pause/await stay guarded
-               in later instants. *)
-          let guard_task =
-            spawn_now ~parent:t st parent_thread (Any s :: parent_guards) parent_kill_ctx
-              (fun () ->
-                body ();
-                if parent_alive () then begin
-                  let t' =
-                    spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                      (fun () -> continue k ())
-                  in
-                  dlog ~task:t.t_id "step"
-                    "when exit | tasks=#%d -> task=#%d" t.t_id t'.t_id;
-                end)
-          in
-          dlog ~task:guard_task.t_id ~signal:s.s_id "step"
-            "when enter | task=#%d signal=#%d -> schedule task=#%d"
-            t.t_id s.s_id guard_task.t_id;
-      | effect (Watch (s, body)), k ->
-          if s.present then
-            continue k ()
-          else if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
-            let elided_body () =
-              body ();
-              if parent_alive () then begin
-                let t' =
-                  spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                    (fun () -> continue k ())
-                in
-                dlog ~task:t.t_id "step"
-                  "watch elided exit (normal) | task=#%d -> task=#%d"
-                  t.t_id t'.t_id
-              end
-            in
-            let t' =
-              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                elided_body
-            in
-            dlog ~task:t.t_id ~signal:s.s_id "step"
-              "watch elided (ancestor already watches signal) | task=#%d signal=#%d -> task=#%d"
-              t.t_id s.s_id t'.t_id
-          end
-          else
-            let kk = Tempo_low_level.new_kill () in
-            let resumed = ref false in
-            let resume_next () =
-              if not !resumed then begin
-                resumed := true;
-                kk.alive := false;
-                kk.cleanup <- None;
-                let t' =
-                  spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
-                    (fun () -> continue k ())
-                in
-                dlog ~task:t.t_id "step"
-                  "watch exit (killed) | task=#%d -> task=#%d" t.t_id t'.t_id
-              end
-            in
-            let resume_now () =
-              if not !resumed then begin
-                resumed := true;
-                kk.alive := false;
-                kk.cleanup <- None;
-                let t' =
-                  spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                    (fun () -> continue k ())
-                in
-                dlog ~task:t.t_id "step"
-                  "watch exit (normal) | task=#%d -> task=#%d" t.t_id t'.t_id
-              end
-            in
-            kk.cleanup <- Some resume_next;
-            register_kill_watcher st s kk parent_kill_ctx;
-            let guarded_body () =
-              body ();
-              resume_now ()
-            in
-            let t' =
-              spawn_now ~parent:t st parent_thread parent_guards
-                (push_kill_context ~watch_signal_id:s.s_id kk parent_kill_ctx)
-                guarded_body
-            in
-            dlog ~task:t.t_id ~signal:s.s_id "step"
-              "watch enter | task=#%d signal=#%d -> task=#%d"
-              t.t_id s.s_id t'.t_id;
+      | effect (When (s, body)), k -> handle_when s body k
+      | effect (Watch (s, body)), k -> handle_watch s body k
     in
     let cleanup () =
       dispose_task st t
