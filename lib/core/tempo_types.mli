@@ -71,6 +71,7 @@ and registered_missing_state =
 
 and task_guard_meta = {
     mutable guards : any_signal list
+  ; single_guard : any_signal option
   ; mutable pending_guards : int
   ; mutable registered_missing : registered_missing_state
   ; mutable guard_registration_instant : int
