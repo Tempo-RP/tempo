@@ -99,15 +99,15 @@ let task_guards_ok (t : task) =
   match t.guard_meta with
   | None -> true
   | Some gm ->
-      if gm.guards_checked_epoch = !guard_epoch then gm.guards_ok_cached
+      if gm.cache_checked_epoch = !guard_epoch then gm.cache_ok
       else
         let ok =
           match gm.guards with
           | [ Any s ] -> s.present
           | _ -> guards_ok_list gm.guards
         in
-        gm.guards_checked_epoch <- !guard_epoch;
-        gm.guards_ok_cached <- ok;
+        gm.cache_checked_epoch <- !guard_epoch;
+        gm.cache_ok <- ok;
         ok
 
 let task_kills_alive (t : task) =
@@ -208,46 +208,46 @@ let guard_meta_exn (t : task) =
   | Some gm -> gm
   | None -> invalid_arg "task guard metadata missing"
 
-let clear_registered_missing (t : task) =
+let clear_missing_guard_cache (t : task) =
   match t.guard_meta with
   | None -> ()
   | Some gm ->
-      (match gm.registered_missing with
+      (match gm.cache_missing_guards with
       | Missing_many tbl -> Hashtbl.reset tbl
       | Missing_none | Missing_one _ -> ());
-      gm.registered_missing <- Missing_none;
-      gm.pending_guards <- 0
+      gm.cache_missing_guards <- Missing_none;
+      gm.cache_missing_count <- 0
 
-let registered_missing_mem (gm : task_guard_meta) sid =
-  match gm.registered_missing with
+let missing_guard_cache_mem (gm : task_guard_meta) sid =
+  match gm.cache_missing_guards with
   | Missing_none -> false
   | Missing_one one -> Int.equal sid one
   | Missing_many tbl -> Hashtbl.mem tbl sid
 
-let set_registered_missing_from_unique (t : task)
+let set_missing_guard_cache_from_unique (t : task)
     (unique_missing : (int, any_signal) Hashtbl.t) =
   let gm = guard_meta_exn t in
   let count = Hashtbl.length unique_missing in
-  gm.pending_guards <- count;
+  gm.cache_missing_count <- count;
   match count with
-  | 0 -> clear_registered_missing t
+  | 0 -> clear_missing_guard_cache t
   | 1 ->
       let sid = ref (-1) in
       Hashtbl.iter (fun key _ -> sid := key) unique_missing;
-      (match gm.registered_missing with
+      (match gm.cache_missing_guards with
       | Missing_many tbl -> Hashtbl.reset tbl
       | Missing_none | Missing_one _ -> ());
-      gm.registered_missing <- Missing_one !sid
+      gm.cache_missing_guards <- Missing_one !sid
   | _ ->
       let tbl =
-        match gm.registered_missing with
+        match gm.cache_missing_guards with
         | Missing_many tbl ->
             Hashtbl.reset tbl;
             tbl
         | Missing_none | Missing_one _ -> Hashtbl.create (max 4 count)
       in
       Hashtbl.iter (fun sid _ -> Hashtbl.replace tbl sid ()) unique_missing;
-      gm.registered_missing <- Missing_many tbl
+      gm.cache_missing_guards <- Missing_many tbl
 
 let register_missing_guards (st : scheduler_state) (t : task)
     (missing : any_signal list) =
@@ -260,13 +260,13 @@ let register_missing_guards (st : scheduler_state) (t : task)
       if not (Hashtbl.mem unique_missing s.s_id) then
         Hashtbl.add unique_missing s.s_id signal)
     missing;
-  if gm.guard_registration_instant <> st.debug.instant_counter then begin
-    gm.guard_registration_instant <- st.debug.instant_counter;
-    clear_registered_missing t
+  if gm.cache_registration_instant <> st.debug.instant_counter then begin
+    gm.cache_registration_instant <- st.debug.instant_counter;
+    clear_missing_guard_cache t
   end;
   Hashtbl.iter
     (fun sid signal ->
-      if not (registered_missing_mem gm sid) then begin
+      if not (missing_guard_cache_mem gm sid) then begin
         let Any s = signal in
         ensure_signal_tracked st s;
         st.metrics.guard_waiter_registrations <-
@@ -274,25 +274,25 @@ let register_missing_guards (st : scheduler_state) (t : task)
         s.guard_waiters <- t :: s.guard_waiters
       end)
     unique_missing;
-  set_registered_missing_from_unique t unique_missing
+  set_missing_guard_cache_from_unique t unique_missing
 
 let register_single_missing_guard (st : scheduler_state) (t : task) (Any s) =
   let gm = guard_meta_exn t in
-  if gm.guard_registration_instant <> st.debug.instant_counter then begin
-    gm.guard_registration_instant <- st.debug.instant_counter;
-    clear_registered_missing t
+  if gm.cache_registration_instant <> st.debug.instant_counter then begin
+    gm.cache_registration_instant <- st.debug.instant_counter;
+    clear_missing_guard_cache t
   end;
-  if not (registered_missing_mem gm s.s_id) then begin
+  if not (missing_guard_cache_mem gm s.s_id) then begin
     ensure_signal_tracked st s;
     st.metrics.guard_waiter_registrations <-
       st.metrics.guard_waiter_registrations + 1;
     s.guard_waiters <- t :: s.guard_waiters
   end;
-  (match gm.registered_missing with
+  (match gm.cache_missing_guards with
   | Missing_many tbl -> Hashtbl.reset tbl
   | Missing_none | Missing_one _ -> ());
-  gm.pending_guards <- 1;
-  gm.registered_missing <- Missing_one s.s_id
+  gm.cache_missing_count <- 1;
+  gm.cache_missing_guards <- Missing_one s.s_id
 
 let infer_guard_cache parent guards =
   let epoch = !guard_epoch in
@@ -307,8 +307,8 @@ let infer_guard_cache parent guards =
         if p_guards = [] then (epoch, true)
         else
           (match p.guard_meta with
-          | Some pgm when pgm.guards_checked_epoch = epoch ->
-              (epoch, pgm.guards_ok_cached)
+          | Some pgm when pgm.cache_checked_epoch = epoch ->
+              (epoch, pgm.cache_ok)
           | _ -> default ())
       else
         match guards with
@@ -317,7 +317,7 @@ let infer_guard_cache parent guards =
             else
               (match p.guard_meta with
               | Some pgm
-                when pgm.guards_checked_epoch = epoch && pgm.guards_ok_cached ->
+                when pgm.cache_checked_epoch = epoch && pgm.cache_ok ->
                   (epoch, s.present)
               | _ -> default ())
         | _ -> default ()
@@ -325,17 +325,17 @@ let infer_guard_cache parent guards =
 let make_guard_meta ?parent guards =
   if guards = [] then None
   else
-    let guards_checked_epoch, guards_ok_cached =
+    let cache_checked_epoch, cache_ok =
       infer_guard_cache parent guards
     in
     Some
       {
         guards
-      ; pending_guards = 0
-      ; registered_missing = Missing_none
-      ; guard_registration_instant = -1
-      ; guards_checked_epoch
-      ; guards_ok_cached
+      ; cache_missing_count = 0
+      ; cache_missing_guards = Missing_none
+      ; cache_registration_instant = -1
+      ; cache_checked_epoch
+      ; cache_ok
       }
 
 let create_task ?parent st thread guards kill_ctx run =
@@ -409,8 +409,8 @@ let block_on_guards (st : scheduler_state) (t : task) =
   match t.guard_meta with
   | None -> ()
   | Some gm ->
-      gm.guards_checked_epoch <- !guard_epoch;
-      gm.guards_ok_cached <- false;
+      gm.cache_checked_epoch <- !guard_epoch;
+      gm.cache_ok <- false;
       (match gm.guards with
       | [ signal ] -> register_single_missing_guard st t signal
       | _ ->
@@ -425,8 +425,8 @@ let block_on_guards_with_missing (st : scheduler_state) (t : task) miss =
   match t.guard_meta with
   | None -> ()
   | Some gm ->
-      gm.guards_checked_epoch <- !guard_epoch;
-      gm.guards_ok_cached <- false;
+      gm.cache_checked_epoch <- !guard_epoch;
+      gm.cache_ok <- false;
       (match gm.guards, miss with
       | [ signal ], [ _ ] -> register_single_missing_guard st t signal
       | _ -> register_missing_guards st t miss)
@@ -437,28 +437,28 @@ let wake_guard_waiters st s =
       match t.guard_meta with
       | None -> ()
       | Some gm ->
-          if gm.guard_registration_instant = st.debug.instant_counter then begin
-            (match gm.registered_missing with
+          if gm.cache_registration_instant = st.debug.instant_counter then begin
+            (match gm.cache_missing_guards with
             | Missing_none -> ()
             | Missing_one sid ->
                 if Int.equal sid s.s_id then begin
-                  gm.registered_missing <- Missing_none;
-                  if gm.pending_guards > 0 then
-                    gm.pending_guards <- gm.pending_guards - 1
+                  gm.cache_missing_guards <- Missing_none;
+                  if gm.cache_missing_count > 0 then
+                    gm.cache_missing_count <- gm.cache_missing_count - 1
                 end
             | Missing_many tbl ->
                 if Hashtbl.mem tbl s.s_id then begin
                   Hashtbl.remove tbl s.s_id;
-                  if gm.pending_guards > 0 then
-                    gm.pending_guards <- gm.pending_guards - 1
+                  if gm.cache_missing_count > 0 then
+                    gm.cache_missing_count <- gm.cache_missing_count - 1
                 end);
-            if gm.pending_guards = 0 then begin
-              (match gm.registered_missing with
+            if gm.cache_missing_count = 0 then begin
+              (match gm.cache_missing_guards with
               | Missing_many tbl -> Hashtbl.reset tbl
               | Missing_none | Missing_one _ -> ());
-              gm.registered_missing <- Missing_none;
-              gm.guards_checked_epoch <- !guard_epoch;
-              gm.guards_ok_cached <- true;
+              gm.cache_missing_guards <- Missing_none;
+              gm.cache_checked_epoch <- !guard_epoch;
+              gm.cache_ok <- true;
               if task_kills_alive t then begin
                 st.metrics.guard_waiter_wakeups <-
                   st.metrics.guard_waiter_wakeups + 1;

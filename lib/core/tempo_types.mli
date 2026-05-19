@@ -68,18 +68,19 @@ and ('emit, 'agg, 'mode) signal_kind =
     }
       -> ('emit, 'agg, aggregate) signal_kind
 
-and registered_missing_state =
+and missing_guard_cache =
   | Missing_none
   | Missing_one of int
   | Missing_many of (int, unit) Hashtbl.t
 
 and task_guard_meta = {
+    (* Semantic guard set. The remaining fields cache runtime registration state. *)
     mutable guards : any_signal list
-  ; mutable pending_guards : int
-  ; mutable registered_missing : registered_missing_state
-  ; mutable guard_registration_instant : int
-  ; mutable guards_checked_epoch : int
-  ; mutable guards_ok_cached : bool
+  ; mutable cache_missing_count : int
+  ; mutable cache_missing_guards : missing_guard_cache
+  ; mutable cache_registration_instant : int
+  ; mutable cache_checked_epoch : int
+  ; mutable cache_ok : bool
 }
 
 and task = {
