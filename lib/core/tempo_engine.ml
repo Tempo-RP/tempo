@@ -199,9 +199,11 @@ let emit_snapshot on_snapshot st phase =
   | Some f -> f (make_snapshot st phase)
 
 let dispose_task st t =
-  st.metrics.tasks_disposed <- st.metrics.tasks_disposed + 1;
-  finish_task st.threads t.thread;
-  recycle_task st t
+  if t.thread >= 0 then begin
+    st.metrics.tasks_disposed <- st.metrics.tasks_disposed + 1;
+    finish_task st.threads t.thread;
+    recycle_task st t
+  end
 
 let handle_task : scheduler_state -> task -> unit =
   fun st t ->
@@ -211,6 +213,10 @@ let handle_task : scheduler_state -> task -> unit =
     let parent_guards = task_guards t in
     let parent_kill_ctx = task_kill_ctx t in
     let parent_alive () = kill_context_alive parent_kill_ctx in
+    t.generation <- t.generation + 1;
+    let generation = t.generation in
+    t.retained <- false;
+    st.running_task <- Some t;
     let dlog ?task ?signal scope fmt =
       if debug_enabled then
         Tempo_log.log ?task ?signal (ctx) scope fmt
@@ -310,12 +316,34 @@ let handle_task : scheduler_state -> task -> unit =
     in
     let handle_pause : (unit, unit) continuation -> unit =
      fun k ->
-      let new_task =
-        spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
-          (fun () -> continue k ())
+      let current_task =
+        match st.running_task with
+        | Some task -> task
+        | None -> t
       in
-      dlog ~task:new_task.t_id "step"
-        "pause | task=#%d resume next instant as task #%d" t.t_id new_task.t_id
+      if parent_guards <> [] then
+        let new_task =
+          spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
+            (fun () -> continue k ())
+        in
+        dlog ~task:new_task.t_id "step"
+          "pause | task=#%d resume next instant as task #%d"
+          current_task.t_id new_task.t_id
+      else if current_task.thread = parent_thread then begin
+        current_task.retained <- true;
+        reset_task current_task parent_thread parent_guards parent_kill_ctx
+          (fun () -> continue k ());
+        enqueue_next st current_task;
+        dlog ~task:current_task.t_id "step"
+          "pause | task=#%d resume next instant" current_task.t_id
+      end else
+        let new_task =
+          spawn_next st parent_thread parent_guards parent_kill_ctx
+            (fun () -> continue k ())
+        in
+        dlog ~task:new_task.t_id "step"
+          "pause | task=#%d resume next instant as task #%d"
+          current_task.t_id new_task.t_id
     in
     let handle_parallel : (unit -> unit) list -> (unit, unit) continuation -> unit =
      fun procs k ->
@@ -465,7 +493,7 @@ let handle_task : scheduler_state -> task -> unit =
       | effect (Watch (s, body)), k -> handle_watch s body k
     in
     let cleanup () =
-      dispose_task st t
+      if t.generation = generation && not t.retained then dispose_task st t
     in
     try Fun.protect ~finally:cleanup run_task with
     | Aborted -> ()
@@ -625,6 +653,7 @@ let create_scheduler_state () =
     ;blocked         = []
     ;free_tasks      = []
     ;retired_tasks   = []
+    ;running_task    = None
     ;signals         = []
     ;thread_counter  = 0
     ;debug           =

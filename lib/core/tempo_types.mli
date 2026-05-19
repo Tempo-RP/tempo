@@ -86,6 +86,8 @@ and task = {
   ; mutable run : unit -> unit
   ; mutable queued : bool
   ; mutable blocked : bool
+  ; mutable retained : bool
+  ; mutable generation : int
 }
 
 and any_signal = Any : ('emit, 'agg, 'mode) signal_core -> any_signal
@@ -137,6 +139,7 @@ type scheduler_state = {
   ; mutable blocked : task list
   ; mutable free_tasks : task list
   ; mutable retired_tasks : task list
+  ; mutable running_task : task option
   ; mutable signals : any_signal list
   ; mutable thread_counter : int
   ; threads : thread_table

@@ -264,6 +264,8 @@ let create_task ?parent st thread guards kill_ctx run =
       t.run <- run;
       t.queued <- false;
       t.blocked <- false;
+      t.retained <- false;
+      t.generation <- 0;
       t
   | [] ->
       {
@@ -274,7 +276,17 @@ let create_task ?parent st thread guards kill_ctx run =
       ; run
       ; queued = false
       ; blocked = false
+      ; retained = false
+      ; generation = 0
       }
+
+let reset_task t thread guards kill_ctx run =
+  t.guard_meta <- make_guard_meta guards;
+  t.kill_ctx <- kill_ctx;
+  t.thread <- thread;
+  t.run <- run;
+  t.queued <- false;
+  t.blocked <- false
 
 let spawn_now ?parent st thread guards kill_ctx run =
   let t = create_task ?parent st thread guards kill_ctx run in
@@ -293,6 +305,8 @@ let recycle_task (st : scheduler_state) (t : task) =
   t.run <- (fun () -> ());
   t.queued <- false;
   t.blocked <- false;
+  t.retained <- false;
+  t.generation <- 0;
   st.retired_tasks <- t :: st.retired_tasks
 
 let block_on_guards (st : scheduler_state) (t : task) =
