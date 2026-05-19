@@ -571,11 +571,17 @@ let handle_task : scheduler_state -> task -> unit =
         in
         let kk = Tempo_low_level.new_kill () in
         let resumed = ref false in
-        let resume_next () =
-          if not !resumed then begin
+        let close_watch () =
+          if !resumed then false
+          else begin
             resumed := true;
             kk.alive := false;
             kk.cleanup <- None;
+            true
+          end
+        in
+        let resume_next () =
+          if close_watch () then begin
             let t' =
               spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
                 (fun () -> continue k ())
@@ -585,10 +591,7 @@ let handle_task : scheduler_state -> task -> unit =
           end
         in
         let resume_now () =
-          if not !resumed then begin
-            resumed := true;
-            kk.alive := false;
-            kk.cleanup <- None;
+          if close_watch () then begin
             let t' =
               spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
                 (fun () -> continue k ())
@@ -598,10 +601,7 @@ let handle_task : scheduler_state -> task -> unit =
           end
         in
         let resume_now_stable () =
-          if not !resumed then begin
-            resumed := true;
-            kk.alive := false;
-            kk.cleanup <- None;
+          if close_watch () then begin
             match st.running_task with
             | Some task when task.thread = parent_thread ->
                 task.retained <- true;
