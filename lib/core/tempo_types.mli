@@ -33,8 +33,10 @@ type aggregate
 
 type 'agg awaiter = {
     resume : 'agg -> unit
+  ; cancel : unit -> unit
   ; kill_ctx : kill_context
   ; thread : thread
+  ; suspended_thread : bool
 }
 type join_waiter = {
     resume : unit -> unit

@@ -258,7 +258,19 @@ let handle_task : scheduler_state -> task -> unit =
     let handle_await : type emit agg mode.
         (emit, agg, mode) signal_core -> (agg, unit) continuation -> unit =
      fun s k ->
-      let resume v =
+      let current_task =
+        match st.running_task with
+        | Some task -> task
+        | None -> t
+      in
+      let resume_stable v =
+        reset_task current_task parent_thread parent_guards parent_kill_ctx
+          (fun () -> continue k v);
+        enqueue_next st current_task;
+        dlog ~task:current_task.t_id ~signal:s.s_id "step"
+          "resume await | task=#%d signal=#%d" current_task.t_id s.s_id
+      in
+      let resume_spawn v =
         let new_task =
           spawn_next ~parent:t st parent_thread parent_guards parent_kill_ctx
             (fun () -> continue k v)
@@ -267,23 +279,47 @@ let handle_task : scheduler_state -> task -> unit =
           "resume await | task=#%d -> task=#%d signal=#%d"
           t.t_id new_task.t_id s.s_id
       in
+      let register_stable_awaiter () =
+        current_task.retained <- true;
+        register_awaiter st s
+          {
+            resume = resume_stable
+          ; cancel = (fun () -> dispose_task st current_task)
+          ; kill_ctx = parent_kill_ctx
+          ; thread = parent_thread
+          ; suspended_thread = false
+          }
+      in
+      let register_spawn_awaiter () =
+        mark_suspended st.threads parent_thread;
+        register_awaiter st s
+          {
+            resume = resume_spawn
+          ; cancel = (fun () -> ())
+          ; kill_ctx = parent_kill_ctx
+          ; thread = parent_thread
+          ; suspended_thread = true
+          }
+      in
       if s.present then
         match s.kind with
         | Event_signal ->
             dlog ~task:t.t_id ~signal:s.s_id "step"
               "await present | task=#%d signal=#%d -> resume next instant"
               t.t_id s.s_id;
-            resume (Option.get s.value)
+            if current_task.thread = parent_thread then begin
+              current_task.retained <- true;
+              resume_stable (Option.get s.value)
+            end else
+              resume_spawn (Option.get s.value)
         | Aggregate_signal _ ->
-            mark_suspended st.threads parent_thread;
-            register_awaiter st s
-              { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
+            if current_task.thread = parent_thread then register_stable_awaiter ()
+            else register_spawn_awaiter ()
       else begin
         dlog ~task:t.t_id ~signal:s.s_id "step"
           "await absent | task=#%d signal`#%d -> enqueue" t.t_id s.s_id;
-        mark_suspended st.threads parent_thread;
-        register_awaiter st s
-          { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
+        if current_task.thread = parent_thread then register_stable_awaiter ()
+        else register_spawn_awaiter ()
       end
     in
     let handle_await_immediate : type a.
@@ -298,7 +334,20 @@ let handle_task : scheduler_state -> task -> unit =
             continue k v
         | None -> failwith "Error : present but no value"
       else
-        let resume v =
+        let current_task =
+          match st.running_task with
+          | Some task -> task
+          | None -> t
+        in
+        let resume_stable v =
+          reset_task current_task parent_thread parent_guards parent_kill_ctx
+            (fun () -> continue k v);
+          enqueue_now st current_task;
+          dlog ~task:current_task.t_id ~signal:s.s_id "step"
+            "resume await imm | task=#%d signal`#%d"
+            current_task.t_id s.s_id
+        in
+        let resume_spawn v =
           let new_task =
             spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
               (fun () -> continue k v)
@@ -310,9 +359,27 @@ let handle_task : scheduler_state -> task -> unit =
         dlog ~task:t.t_id ~signal:s.s_id "step"
           "await immediate absent | task=#%d signal`#%d -> save continuation"
           t.t_id s.s_id;
-        mark_suspended st.threads parent_thread;
-        register_awaiter st s
-          { resume; kill_ctx = parent_kill_ctx; thread = parent_thread }
+        if current_task.thread = parent_thread then begin
+          current_task.retained <- true;
+          register_awaiter st s
+            {
+              resume = resume_stable
+            ; cancel = (fun () -> dispose_task st current_task)
+            ; kill_ctx = parent_kill_ctx
+            ; thread = parent_thread
+            ; suspended_thread = false
+            }
+        end else begin
+          mark_suspended st.threads parent_thread;
+          register_awaiter st s
+            {
+              resume = resume_spawn
+            ; cancel = (fun () -> ())
+            ; kill_ctx = parent_kill_ctx
+            ; thread = parent_thread
+            ; suspended_thread = true
+            }
+        end
     in
     let handle_pause : (unit, unit) continuation -> unit =
      fun k ->

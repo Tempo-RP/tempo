@@ -105,6 +105,14 @@ let update_signal : type emit agg mode.
   Tempo_task.ensure_signal_tracked st s;
   let was_present = s.present in
   let kill_epoch = Tempo_task.current_kill_epoch () in
+  let resume_awaiter (aw : agg Tempo_types.awaiter) value =
+    if aw.suspended_thread then Tempo_thread.mark_resumed st.threads aw.thread;
+    if Tempo_task.kill_context_alive aw.kill_ctx then begin
+      st.metrics.awaiters_resumed <- st.metrics.awaiters_resumed + 1;
+      aw.resume value
+    end else
+      aw.cancel ()
+  in
   (match s.kind with
   | Event_signal ->
       if s.present then invalid_arg "Emit : multiple emission";
@@ -113,14 +121,7 @@ let update_signal : type emit agg mode.
       s.value <- Some v;
       s.awaiters <- [];
       s.awaiters_kill_epoch <- kill_epoch;
-      List.iter
-        (fun (aw : agg Tempo_types.awaiter) ->
-          Tempo_thread.mark_resumed st.threads aw.thread;
-          if Tempo_task.kill_context_alive aw.kill_ctx then begin
-            st.metrics.awaiters_resumed <- st.metrics.awaiters_resumed + 1;
-            aw.resume v
-          end)
-        resumes
+      List.iter (fun aw -> resume_awaiter aw v) resumes
   | Aggregate_signal { combine; initial } ->
       s.present <- true;
       let acc =
@@ -146,13 +147,16 @@ let emit_event_from_host : type a.
   let resumes = s.awaiters in
   s.awaiters <- [];
   s.awaiters_kill_epoch <- kill_epoch;
+  let resume_awaiter (aw : a Tempo_types.awaiter) value =
+    if aw.suspended_thread then Tempo_thread.mark_resumed st.threads aw.thread;
+    if Tempo_task.kill_context_alive aw.kill_ctx then begin
+      st.metrics.awaiters_resumed <- st.metrics.awaiters_resumed + 1;
+      aw.resume value
+    end else
+      aw.cancel ()
+  in
   List.iter
-    (fun (aw : a Tempo_types.awaiter) ->
-      Tempo_thread.mark_resumed st.threads aw.thread;
-      if Tempo_task.kill_context_alive aw.kill_ctx then begin
-        st.metrics.awaiters_resumed <- st.metrics.awaiters_resumed + 1;
-        aw.resume value
-      end)
+    (fun aw -> resume_awaiter aw value)
     resumes;
   if not was_present then Tempo_task.bump_guard_epoch ();
   Tempo_task.wake_guard_waiters st s
@@ -170,7 +174,9 @@ let finalize_signals (st : Tempo_types.scheduler_state) =
             if Tempo_task.kill_context_alive aw.kill_ctx then aw :: acc
             else (
               st.metrics.awaiters_pruned <- st.metrics.awaiters_pruned + 1;
-              Tempo_thread.mark_resumed st.threads aw.thread;
+              if aw.suspended_thread then
+                Tempo_thread.mark_resumed st.threads aw.thread;
+              aw.cancel ();
               acc))
           [] s.awaiters
         |> List.rev;
@@ -239,11 +245,13 @@ let finalize_signals (st : Tempo_types.scheduler_state) =
           s.awaiters_kill_epoch <- Tempo_task.current_kill_epoch ();
           List.iter
             (fun (aw : _ Tempo_types.awaiter) ->
-              Tempo_thread.mark_resumed st.threads aw.thread;
+              if aw.suspended_thread then
+                Tempo_thread.mark_resumed st.threads aw.thread;
               if Tempo_task.kill_context_alive aw.kill_ctx then begin
                 st.metrics.awaiters_resumed <- st.metrics.awaiters_resumed + 1;
                 aw.resume delivered
-              end)
+              end else
+                aw.cancel ())
             resumes
       | _ -> ());
       s.present <- false;
