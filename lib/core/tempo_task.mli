@@ -43,7 +43,13 @@ val block_on_guards_with_missing :
   scheduler_state -> task -> any_signal list -> unit
 
 val reset_task :
-  task -> thread -> any_signal list -> kill_context -> (unit -> unit) -> unit
+     ?parent:task
+  -> task
+  -> thread
+  -> any_signal list
+  -> kill_context
+  -> (unit -> unit)
+  -> unit
 
 val spawn_now :
      ?parent:task

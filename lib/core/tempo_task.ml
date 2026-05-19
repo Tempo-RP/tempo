@@ -280,8 +280,8 @@ let create_task ?parent st thread guards kill_ctx run =
       ; generation = 0
       }
 
-let reset_task t thread guards kill_ctx run =
-  t.guard_meta <- make_guard_meta guards;
+let reset_task ?parent t thread guards kill_ctx run =
+  t.guard_meta <- make_guard_meta ?parent guards;
   t.kill_ctx <- kill_ctx;
   t.thread <- thread;
   t.run <- run;

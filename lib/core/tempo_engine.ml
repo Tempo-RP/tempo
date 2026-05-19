@@ -264,7 +264,8 @@ let handle_task : scheduler_state -> task -> unit =
         | None -> t
       in
       let resume_stable v =
-        reset_task current_task parent_thread parent_guards parent_kill_ctx
+        reset_task ~parent:current_task current_task parent_thread parent_guards
+          parent_kill_ctx
           (fun () -> continue k v);
         enqueue_next st current_task;
         dlog ~task:current_task.t_id ~signal:s.s_id "step"
@@ -340,7 +341,8 @@ let handle_task : scheduler_state -> task -> unit =
           | None -> t
         in
         let resume_stable v =
-          reset_task current_task parent_thread parent_guards parent_kill_ctx
+          reset_task ~parent:current_task current_task parent_thread parent_guards
+            parent_kill_ctx
             (fun () -> continue k v);
           enqueue_now st current_task;
           dlog ~task:current_task.t_id ~signal:s.s_id "step"
@@ -398,7 +400,8 @@ let handle_task : scheduler_state -> task -> unit =
           current_task.t_id new_task.t_id
       else if current_task.thread = parent_thread then begin
         current_task.retained <- true;
-        reset_task current_task parent_thread parent_guards parent_kill_ctx
+        reset_task ~parent:current_task current_task parent_thread parent_guards
+          parent_kill_ctx
           (fun () -> continue k ());
         enqueue_next st current_task;
         dlog ~task:current_task.t_id "step"
@@ -428,7 +431,8 @@ let handle_task : scheduler_state -> task -> unit =
           "parallel resume | parent task=#%d as task=#%d" t.t_id t'.t_id
       in
       let resume_stable () =
-        reset_task current_task parent_thread parent_guards parent_kill_ctx
+        reset_task ~parent:current_task current_task parent_thread parent_guards
+          parent_kill_ctx
           (fun () -> continue k ());
         enqueue_now st current_task;
         dlog ~task:current_task.t_id "step.parallel"
@@ -469,22 +473,38 @@ let handle_task : scheduler_state -> task -> unit =
          - never execute [body] inline in this handler frame because [body]
            can perform effects (await/pause/when_) that must be handled by
            the scheduler task trampoline;
-         - always keep [s] in the spawned task guard set, even if [s] is
+         - always keep [s] in the scheduled task guard set, even if [s] is
            already present, so continuations after pause/await stay guarded
            in later instants. *)
-      let guard_task =
-        spawn_now ~parent:t st parent_thread (Any s :: parent_guards) parent_kill_ctx
-          (fun () ->
-            body ();
-            if parent_alive () then begin
-              dlog ~task:t.t_id "step"
-                "when exit | task=#%d -> continue" t.t_id;
-              continue k ();
-            end)
+      let current_task =
+        match st.running_task with
+        | Some task -> task
+        | None -> t
       in
-      dlog ~task:guard_task.t_id ~signal:s.s_id "step"
-        "when enter | task=#%d signal=#%d -> schedule task=#%d"
-        t.t_id s.s_id guard_task.t_id
+      let guarded_run () =
+        body ();
+        if parent_alive () then begin
+          dlog ~task:current_task.t_id "step"
+            "when exit | task=#%d -> continue" current_task.t_id;
+          continue k ()
+        end
+      in
+      if current_task.thread = parent_thread then begin
+        current_task.retained <- true;
+        reset_task ~parent:current_task current_task parent_thread
+          (Any s :: parent_guards)
+          parent_kill_ctx guarded_run;
+        enqueue_now st current_task;
+        dlog ~task:current_task.t_id ~signal:s.s_id "step"
+          "when enter | task=#%d signal=#%d" current_task.t_id s.s_id
+      end else
+        let guard_task =
+          spawn_now ~parent:t st parent_thread (Any s :: parent_guards)
+            parent_kill_ctx guarded_run
+        in
+        dlog ~task:guard_task.t_id ~signal:s.s_id "step"
+          "when enter | task=#%d signal=#%d -> schedule task=#%d"
+          t.t_id s.s_id guard_task.t_id
     in
     let handle_watch : type emit agg mode.
         (emit, agg, mode) signal_core ->
