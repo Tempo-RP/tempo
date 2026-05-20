@@ -31,32 +31,48 @@ type thread = int
 type event
 type aggregate
 
-type 'agg awaiter = {
-    resume : 'agg -> unit
-  ; cancel : unit -> unit
-  ; kill_ctx : kill_context
-  ; thread : thread
-  ; suspended_thread : bool
+type 'agg resume_plan =
+  | Resume_stable_now of 'agg stable_resume
+  | Resume_stable_next of 'agg stable_resume
+  | Resume_spawn_now of 'agg spawned_resume
+  | Resume_spawn_next of 'agg spawned_resume
+
+and 'agg stable_resume = {
+    resume_continue : 'agg -> unit
+  ; resume_task : task
+  ; resume_thread : thread
+  ; resume_guards : any_signal list
+  ; resume_kill_ctx : kill_context
 }
-type join_waiter = {
+
+and 'agg spawned_resume = {
+    resume_continue : 'agg -> unit
+  ; resume_parent : task
+  ; resume_thread : thread
+  ; resume_guards : any_signal list
+  ; resume_kill_ctx : kill_context
+}
+
+and join_waiter = {
     resume : unit -> unit
   ; cancel : unit -> unit
   ; kill_ctx : kill_context
   ; thread : thread
   ; suspended_thread : bool
 }
-type kill_watcher = { kill : kill; kill_ctx : kill_context }
 
-type signal_tracking =
+and kill_watcher = { kill : kill; kill_ctx : kill_context }
+
+and signal_tracking =
   | Signal_untracked
   | Signal_tracked
 
-type ('emit, 'agg, 'mode) signal_core = {
+and ('emit, 'agg, 'mode) signal_core = {
     s_id : int
   ; mutable tracking : signal_tracking
   ; mutable present : bool
   ; mutable value : 'agg option
-  ; mutable awaiters : 'agg awaiter list
+  ; mutable awaiters : 'agg resume_plan list
   ; mutable awaiters_kill_epoch : int
   ; mutable guard_waiters : task list
   ; mutable kill_watchers : kill_watcher list

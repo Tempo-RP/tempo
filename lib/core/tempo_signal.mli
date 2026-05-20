@@ -29,7 +29,7 @@ val missing_guards : Tempo_types.any_signal list -> Tempo_types.any_signal list
 val register_awaiter :
      Tempo_types.scheduler_state
   -> ('emit, 'agg, 'mode) Tempo_types.signal_core
-  -> 'agg Tempo_types.awaiter
+  -> 'agg Tempo_types.resume_plan
   -> unit
 val register_kill_watcher :
      Tempo_types.scheduler_state

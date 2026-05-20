@@ -402,6 +402,13 @@ let recycle_task (st : scheduler_state) (t : task) =
   t.generation <- 0;
   st.retired_tasks <- t :: st.retired_tasks
 
+let dispose_task st t =
+  if t.thread >= 0 then begin
+    st.metrics.tasks_disposed <- st.metrics.tasks_disposed + 1;
+    Tempo_thread.finish_task st.threads t.thread;
+    recycle_task st t
+  end
+
 let block_on_guards (st : scheduler_state) (t : task) =
   if not t.blocked then (
     t.blocked <- true;

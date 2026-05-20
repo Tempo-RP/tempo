@@ -80,6 +80,7 @@ val spawn_next :
   -> task
 
 val recycle_task : scheduler_state -> task -> unit
+val dispose_task : scheduler_state -> task -> unit
 
 (* val spawn_now_with_id :
   scheduler_state -> thread -> any_signal list -> kill list -> (unit -> unit) -> task
