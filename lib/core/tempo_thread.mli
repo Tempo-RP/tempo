@@ -27,13 +27,19 @@ val find_opt : thread_table -> Tempo_types.thread -> thread_state option
 
 val find : thread_table -> Tempo_types.thread -> thread_state
 
-val add_join_waiter :
-     ?cancel:(unit -> unit)
-  -> ?suspended_thread:bool
-  -> thread_table
+val add_stable_join_waiter :
+     thread_table
   -> Tempo_types.thread
+  -> kill_ctx:Tempo_types.kill_context
+  -> cancel:(unit -> unit)
+  -> (unit -> unit)
+  -> unit
+
+val add_spawn_join_waiter :
+     thread_table
   -> Tempo_types.thread
-  -> Tempo_types.kill_context
+  -> waiter_thread:Tempo_types.thread
+  -> kill_ctx:Tempo_types.kill_context
   -> (unit -> unit)
   -> unit
 

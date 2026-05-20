@@ -447,13 +447,15 @@ let handle_task : scheduler_state -> task -> unit =
             procs;
           if current_task.thread = parent_thread then begin
             current_task.retained <- true;
-            add_join_waiter ~cancel:(fun () -> dispose_task st current_task)
-              ~suspended_thread:false st.threads parallel_thread parent_thread
-              parent_kill_ctx resume_stable
+            add_stable_join_waiter st.threads parallel_thread
+              ~kill_ctx:parent_kill_ctx
+              ~cancel:(fun () -> dispose_task st current_task)
+              resume_stable
           end else begin
             mark_suspended st.threads parent_thread;
-            add_join_waiter st.threads parallel_thread parent_thread
-              parent_kill_ctx resume_spawn
+            add_spawn_join_waiter st.threads parallel_thread
+              ~waiter_thread:parent_thread ~kill_ctx:parent_kill_ctx
+              resume_spawn
           end
     in
     let handle_when : type emit agg mode.

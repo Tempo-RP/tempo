@@ -80,6 +80,13 @@ let add_join_waiter ?(cancel = fun () -> ()) ?(suspended_thread = true)
           :: state.Tempo_types.waiters
       else cancel ()
 
+let add_stable_join_waiter threads thread ~kill_ctx ~cancel resume =
+  add_join_waiter ~cancel ~suspended_thread:false threads thread (-1) kill_ctx
+    resume
+
+let add_spawn_join_waiter threads thread ~waiter_thread ~kill_ctx resume =
+  add_join_waiter threads thread waiter_thread kill_ctx resume
+
 let can_complete (state : thread_state) =
   state.Tempo_types.active = 0 && state.Tempo_types.suspended = 0
 
