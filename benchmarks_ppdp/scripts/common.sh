@@ -161,6 +161,7 @@ sizes_for_benchmark() {
     guarded_cascades_multi) var_name="SIZES_GUARDED_CASCADES_MULTI" ;;
     nested_preemption) var_name="SIZES_NESTED_PREEMPTION" ;;
     reactive_supervision) var_name="SIZES_REACTIVE_SUPERVISION" ;;
+    network_routing) var_name="SIZES_NETWORK_ROUTING" ;;
   esac
 
   if [[ -n "$var_name" ]]; then
@@ -183,7 +184,7 @@ validate_campaign_policy() {
 
   for bench in $BENCHMARKS; do
     case "$bench" in
-      propagation_chains|propagation_chains_multi|broadcast_expansion|fork_explosion|guarded_cascades|guarded_cascades_multi|nested_preemption|reactive_supervision) ;;
+      propagation_chains|propagation_chains_multi|broadcast_expansion|fork_explosion|guarded_cascades|guarded_cascades_multi|nested_preemption|reactive_supervision|network_routing) ;;
       *)
         echo "Unknown benchmark '$bench' in BENCHMARKS." >&2
         exit 1
@@ -243,6 +244,7 @@ write_run_metadata() {
     printf 'sizes_guarded_cascades_multi=%s\n' "${SIZES_GUARDED_CASCADES_MULTI:-}"
     printf 'sizes_nested_preemption=%s\n' "${SIZES_NESTED_PREEMPTION:-}"
     printf 'sizes_reactive_supervision=%s\n' "${SIZES_REACTIVE_SUPERVISION:-}"
+    printf 'sizes_network_routing=%s\n' "${SIZES_NETWORK_ROUTING:-}"
     printf 'max_reasonable_size=%s\n' "$MAX_REASONABLE_SIZE"
     printf 'allow_large_n=%s\n' "$ALLOW_LARGE_N"
     printf 'peak_mb_source=%s\n' "os_rss_time"

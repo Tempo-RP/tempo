@@ -16,6 +16,8 @@ let effective_supervision_sensors n = max 1 n
 let effective_supervision_rounds n =
   let n = max 2 n in
   max 8 (2 * int_of_float (log (float_of_int n) /. log 2.))
+let effective_network_nodes n = max 2 n
+let effective_network_rounds _n = 24
 
 let instants_for bench n =
   match bench with
@@ -25,6 +27,7 @@ let instants_for bench n =
   | "guarded_cascades_multi" -> effective_multi_rounds n
   | "nested_preemption" -> 2
   | "reactive_supervision" -> (2 * effective_supervision_rounds n) + 1
+  | "network_routing" -> (2 * effective_network_rounds n) + 1
   | _ -> 1
 
 let parse_args () =
@@ -269,6 +272,184 @@ let process bench_supervision n =
       ("supervision supervisor total mismatch: "
        ^ string_of_int !supervisor_total)
 
+type network_pos = { x : float; y : float }
+type network_info = { info_id : int; info_pos : network_pos; info_date : int }
+
+type network_node = {
+  node_id : int;
+  mutable pos : network_pos;
+  mutable date : int;
+  known_x : float array;
+  known_y : float array;
+  known_date : int array;
+  mutable neighbors : network_info list;
+}
+
+let network_distance2 a b =
+  let dx = b.x -. a.x in
+  let dy = b.y -. a.y in
+  (dx *. dx) +. (dy *. dy)
+
+let network_initial_pos nodes id =
+  let side = (sqrt (float_of_int nodes) *. 30.) +. 1. in
+  {
+    x = float_of_int ((id * 73 + 19) mod int_of_float side);
+    y = float_of_int ((id * 97 + 41) mod int_of_float side);
+  }
+
+let network_move nodes id round pos =
+  let side = (sqrt (float_of_int nodes) *. 30.) +. 1. in
+  let speed = 1. +. float_of_int ((id + round) mod 5) in
+  let dir = (id * 13 + round * 7) mod 8 in
+  let dx, dy =
+    match dir with
+    | 0 -> (0., speed)
+    | 1 -> (speed, speed)
+    | 2 -> (speed, 0.)
+    | 3 -> (speed, -.speed)
+    | 4 -> (0., -.speed)
+    | 5 -> (-.speed, -.speed)
+    | 6 -> (-.speed, 0.)
+    | _ -> (-.speed, speed)
+  in
+  { x = min (side -. 1.) (max 0. (pos.x +. dx)); y = min (side -. 1.) (max 0. (pos.y +. dy)) }
+
+let network_area_index area_cols area_size pos =
+  let clamp v = max 0 (min (area_cols - 1) v) in
+  let i = clamp (int_of_float (pos.x /. area_size)) in
+  let j = clamp (int_of_float (pos.y /. area_size)) in
+  (i * area_cols) + j
+
+let network_update_table node info =
+  node.known_x.(info.info_id) <- info.info_pos.x;
+  node.known_y.(info.info_id) <- info.info_pos.y;
+  node.known_date.(info.info_id) <- info.info_date
+
+let network_select_neighbors node infos coverage2 =
+  List.fold_left
+    (fun acc info ->
+      if info.info_id <> node.node_id && network_distance2 node.pos info.info_pos <= coverage2
+      then (
+        network_update_table node info;
+        info :: acc)
+      else acc)
+    [] infos
+
+let network_message_dest nodes id round =
+  let dest = (id + (round * 17) + 11) mod nodes in
+  if dest = id then (dest + 1) mod nodes else dest
+
+let network_has_message id round =
+  ((id * 31) + (round * 17)) mod 100 < 35
+
+let rec network_route_loop all_nodes dest_id current_id hops checksum =
+  let current = all_nodes.(current_id) in
+  if current_id = dest_id then checksum + hops + 1
+  else if hops > 16 then checksum + hops + 1
+  else if current.known_date.(dest_id) < 0 then checksum + hops + 1
+  else
+    let dest_pos =
+      { x = current.known_x.(dest_id); y = current.known_y.(dest_id) }
+    in
+    let current_dist = network_distance2 current.pos dest_pos in
+    let best =
+      List.fold_left
+        (fun best info ->
+          let d = network_distance2 info.info_pos dest_pos in
+          match best with
+          | None when d < current_dist -> Some (info.info_id, d)
+          | Some (_, best_d) when d < best_d -> Some (info.info_id, d)
+          | Some (best_id, best_d) when d = best_d && info.info_id < best_id ->
+              Some (info.info_id, d)
+          | _ -> best)
+        None current.neighbors
+    in
+    match best with
+    | None -> checksum + hops + 1
+    | Some (next_id, _) ->
+        network_route_loop all_nodes dest_id next_id (hops + 1)
+          (checksum + current_id + next_id)
+
+let network_route nodes all_nodes src_id dest_id =
+  if nodes <= 1 then 0 else network_route_loop all_nodes dest_id src_id 0 0
+
+let rec process network_node_process
+    id round rounds nodes area_cols area_size coverage coverage2 hello all_nodes checksum =
+  if round >= rounds then ()
+  else
+    let self = all_nodes.(id) in
+    self.date <- self.date + 1;
+    self.pos <- network_move nodes id round self.pos;
+    let info = { info_id = id; info_pos = self.pos; info_date = self.date } in
+    let left = int_of_float ((info.info_pos.x -. coverage) /. area_size) in
+    let right = int_of_float ((info.info_pos.x +. coverage) /. area_size) in
+    let down = int_of_float ((info.info_pos.y -. coverage) /. area_size) in
+    let up = int_of_float ((info.info_pos.y +. coverage) /. area_size) in
+    for i = max 0 left to min (area_cols - 1) right do
+      for j = max 0 down to min (area_cols - 1) up do
+        emit hello.((i * area_cols) + j) info
+      done
+    done;
+    let area = network_area_index area_cols area_size self.pos in
+    await hello.(area)(visible) in
+    self.neighbors <- network_select_neighbors self visible coverage2;
+    pause;
+    if network_has_message id round then
+      let dest = network_message_dest nodes id round in
+      checksum := !checksum + network_route nodes all_nodes id dest;
+    pause;
+    run
+      (network_node_process id (round + 1) rounds nodes area_cols area_size
+         coverage coverage2 hello all_nodes checksum)
+
+let rec process network_nodes
+    id nodes rounds area_cols area_size coverage coverage2 hello kill all_nodes checksum =
+  if id >= nodes then ()
+  else
+    (do
+       run
+         (network_node_process id 0 rounds nodes area_cols area_size coverage
+            coverage2 hello all_nodes checksum)
+     until kill
+     done
+     ||
+     run
+       (network_nodes (id + 1) nodes rounds area_cols area_size coverage
+          coverage2 hello kill all_nodes checksum))
+
+let process bench_network_routing n =
+  let nodes = effective_network_nodes n in
+  let rounds = effective_network_rounds n in
+  let coverage = 42. in
+  let coverage2 = coverage *. coverage in
+  let area_size = coverage *. 2. in
+  let side = (sqrt (float_of_int nodes) *. 30.) +. 1. in
+  let area_cols = max 1 (int_of_float (ceil (side /. area_size))) in
+  let area_count = area_cols * area_cols in
+  let all_nodes =
+    Array.init nodes
+      (fun id ->
+        let pos = network_initial_pos nodes id in
+        let known_x = Array.make nodes 0. in
+        let known_y = Array.make nodes 0. in
+        let known_date = Array.make nodes (-1) in
+        known_x.(id) <- pos.x;
+        known_y.(id) <- pos.y;
+        known_date.(id) <- 0;
+        { node_id = id; pos = pos; date = 0; known_x = known_x; known_y = known_y;
+          known_date = known_date; neighbors = [] })
+  in
+  let checksum = ref 0 in
+  signal kill in
+  let hello =
+    Array.init area_count
+      (fun _ -> signal h default [] gather fun info acc -> info :: acc in h)
+  in
+  run
+    (network_nodes 0 nodes rounds area_cols area_size coverage coverage2 hello
+       kill all_nodes checksum);
+  if !checksum <= 0 then failwith "network routing checksum mismatch"
+
 let process selected =
   match !benchmark with
   | "propagation_chains" -> run (bench_propagation !size)
@@ -279,6 +460,7 @@ let process selected =
   | "guarded_cascades_multi" -> run (bench_guarded_multi !size)
   | "nested_preemption" -> run (bench_preemption !size)
   | "reactive_supervision" -> run (bench_supervision !size)
+  | "network_routing" -> run (bench_network_routing !size)
   | x -> invalid_arg ("unknown benchmark: " ^ x)
 
 let peak_mb () =

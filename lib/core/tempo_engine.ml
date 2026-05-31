@@ -507,9 +507,7 @@ let handle_task : scheduler_state -> task -> unit =
         (unit, unit) continuation ->
         unit =
      fun s body k ->
-      if s.present then
-        continue k ()
-      else if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
+      if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
         let current_task =
           match st.running_task with
           | Some task -> task
