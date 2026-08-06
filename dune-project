@@ -31,7 +31,7 @@
   (ocaml (>= 5.3.0))
   (dune (>= 3.0))
   (tempo (= :version))
-  raylib))
+  (raylib (>= 2.2.2))))
 
 (package
  (name tempo-fluidsynth)

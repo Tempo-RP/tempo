@@ -608,7 +608,7 @@ let () =
   if headless then run_headless instants
   else (
     init_window logical_width logical_height "Tempo Core Studio";
-    set_window_state [ ConfigFlags.Window_resizable ];
+    set_window_state ConfigFlags.window_resizable;
     set_target_fps 60;
     let ui_font = load_ui_font () in
     let draw_text = draw_text_ui ui_font in

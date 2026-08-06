@@ -11,6 +11,8 @@
   parallel
   pause
   watch_complete
+  watch_blocked_join
+  watch_emit_order
   watch_killed
   watch_nested
   watch_present_delayed

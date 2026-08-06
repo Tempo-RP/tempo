@@ -760,9 +760,10 @@ let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
         List.iter
           ( fun (t : task) ->
               if t.blocked then begin
-              t.blocked <- false;
-              if task_kills_alive t then enqueue_next st t
-            end )
+                t.blocked <- false;
+                if task_kills_alive t then enqueue_next st t
+                else dispose_task st t
+              end )
           st.blocked;
           emit_snapshot on_snapshot st `After_finalize;
           st.debug.instant_counter <- st.debug.instant_counter + 1;

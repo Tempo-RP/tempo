@@ -23,12 +23,13 @@
     
     Programs are executed according to a synchronous semantics: 
     computation progresses in a sequence of logical instants,
-    and all observable effects within an instant are considered to occur
-    simultaneously 
+    and reactive signal observations within an instant form one synchronous
+    reaction. Ordinary OCaml side effects retain their usual execution order.
     
     For a given set of signal emissions in each instant, the observable
-    behavior of purely functional program is deterministic. Internal scheduling and
-    execution order are not observable and do not affect the final
+    behavior of a purely functional program is deterministic when aggregate
+    updates are independent of emission order. Internal scheduling and
+    execution order are then not observable and do not affect the final
     synchronous outcome.
     
     *)
@@ -85,7 +86,9 @@ val new_signal : unit -> 'a signal
     [initial] for the first emission of the instant. Aggregate signals can be
     used with the same primitives as event signals; the sole restriction is that
     {!val:await_immediate} is unavailable because their combined value is only
-    produced at the end of the instant. *)
+    produced at the end of the instant. If several tasks may emit concurrently,
+    [combine] must make accumulation independent of emission order to retain
+    scheduler-order determinism. *)
 val new_signal_agg :
   initial:'agg -> combine:('agg -> 'emit -> 'agg) -> ('emit, 'agg) agg_signal
 
@@ -173,10 +176,10 @@ val when_ : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
 
 (** {2 Cancellation } *)
 
-(** [watch s body] runs [body] while [s] stays absent.
-
-    If [s] becomes present during an instant and [body] has not yet finished,
-    the runtime interrupts [body] before the next instant so it never resumes. *)
+(** [watch s body] starts [body] in the current instant. If [s] is present at
+    instant closure and [body] has not yet finished, the runtime interrupts
+    [body] before the next instant so it never resumes. Effects already produced
+    by [body] in the closing instant remain visible. *)
 val watch : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
 
 (** {2 Concurrency}

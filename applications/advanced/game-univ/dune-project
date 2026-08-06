@@ -10,4 +10,4 @@
   (ocaml (>= 5.3.0))
   dune
   tempo
-  raylib))
+  (raylib (>= 2.2.2))))

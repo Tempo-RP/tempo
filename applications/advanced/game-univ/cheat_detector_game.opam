@@ -7,7 +7,7 @@ depends: [
   "ocaml" {>= "5.3.0"}
   "dune" {>= "3.19"}
   "tempo"
-  "raylib"
+  "raylib" {>= "2.2.2"}
   "odoc" {with-doc}
 ]
 build: [
