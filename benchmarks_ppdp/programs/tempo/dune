@@ -1,3 +1,0 @@
-(executable
- (name tempo_bench)
- (libraries tempo unix memtrace))

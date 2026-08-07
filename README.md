@@ -160,30 +160,3 @@ Open local docs at:
 ```
 _build/default/_doc/_html/tempo/index.html
 ```
-
-## Simple demos
-
-```sh
-sh applications/simple-demos/ca-continuous-raylib/run
-sh applications/simple-demos/cloth-raylib/run
-sh applications/simple-demos/nbody-raylib/run
-sh applications/simple-demos/pendulums-raylib/run
-sh applications/simple-demos/solar-system-raylib/run
-```
-
-## Application screenshots
-
-`solar-system-raylib`  
-![solar-system-raylib](docs/screenshots/solar-system-raylib.png)
-
-`ca-continuous-raylib`  
-![ca-continuous-raylib](docs/screenshots/ca-continuous-raylib.png)
-
-`nbody-raylib`  
-![nbody-raylib](docs/screenshots/nbody-raylib.png)
-
-`pendulums-raylib`  
-![pendulums-raylib](docs/screenshots/pendulums-raylib.png)
-
-`cloth-raylib`  
-![cloth-raylib](docs/screenshots/cloth-raylib.png)
