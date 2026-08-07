@@ -1,197 +1,167 @@
 # Tempo
 
-A lightweight synchronous runtime inspired by Esterel, Boussinot’s FairThreads, and ReactiveML.
-All three are grounded in the idea that deterministic concurrency can be made tractable by discretizing time into logical instants, during which all components react to the signals emitted in that instant. In Esterel, the absence of a signal is decided immediately, which enforces a static scheduling discipline and consequently rules out many forms of dynamic behavior. FairThreads addressed this limitation by postponing the observation of absence until the end of the instant, thereby enabling more flexible execution patterns. ReactiveML carried these ideas into OCaml, retaining Boussinot’s delayed-absence semantics while enriching the model with higher-order programming constructs. Tempo keeps that “reaction delayed to absence” principle while leveraging OCaml 5 effects to experiment with modern implementations.
+> A lightweight synchronous runtime inspired by Esterel, Boussinot’s FairThreads, and ReactiveML.
+
+Tempo is a deterministic reactive execution model for OCaml: programs evolve by logical instants, communicate with signals, and coordinate behavior safely through event-driven control.
 
 ## Table of contents
 
-- [Programmation model](#programming-model)
+- [Overview](#overview)
+- [Programming model](#programming-model)
   - [Instants and execution model](#instants-and-execution-model)
   - [Fundamental primitives](#fundamental-primitives)
   - [Construct primitives](#construct-primitives)
   - [Control helpers](#control-helpers)
-- [Install, build and test](#installation-and-build)
-  - [Installation](#installation)
-  - [Build](#build)
-  - [Run tests](#run-tests)
-  - [Documentation](#documentation)
-- [Demos](#demos)
-  - [Run applications](#run-applications)
-  - [Advanced applications: dependencies and Tempo libraries](#advanced-applications-dependencies-and-tempo-libraries)
-  - [Run sample applications](#run-sample-applications)
-- [Quick start]
-  - [Create and run your own Tempo application](#create-and-run-your-own-tempo-application)
+- [Install Tempo](#install-tempo)
+  - [Requirements](#requirements)
+  - [Install from opam](#install-from-opam)
+- [Quick start](#quick-start)
+  - [Create and run a minimal application](#create-and-run-a-minimal-application)
   - [Logging and runtime flags](#logging-and-runtime-flags)
+- [Contributing](#contributing)
+- [Run demos](#run-demos)
+  - [Simple demos](#simple-demos)
+  - [Advanced applications](#advanced-applications)
 - [Application screenshots](#application-screenshots)
+- [Troubleshooting](#troubleshooting)
 
 ---
+
+## Overview
+
+- Tempo programs execute in **logical instants**.
+- Communication is based on **signals** carrying values.
+- The scheduler guarantees deterministic behavior when primitives are used correctly.
+- It is useful for reactive behaviors, event orchestration, and simulation-style workloads.
 
 ## Programming model
 
 ### Instants and execution model
 
-A Tempo program executes over a sequence of logical instants. It supports synchronous parallel composition of behaviors that communicate through valued signals. At each instant, a signal is either present or absent. A signal is present if and only if a value is provided by the environment or emitted by the program during that instant.
-The absence of a signal can be observed only once the instant has completed. Observers may then react in the following instant. This delayed observation of absence is the key mechanism that preserves determinism.
-Tempo supports guarded execution and weak preemption, allowing behaviors to be conditionally activated and preempted without violating the synchronous execution model.
+A program is evaluated over a sequence of discrete instants. At each instant:
 
----
+- A signal is either **present** (emitted by environment or program) or **absent**.
+- The absence of a signal is only observed in the following instant, which preserves determinism.
+- Weak preemption is supported through constructs such as `watch`, allowing controlled interruption without breaking synchronous semantics.
 
 ### Fundamental primitives
 
-Tempo manipulates signals that carry values during a logical instant. Two kinds of signals are supported:
+Tempo supports two kinds of signals:
 
-- **Event signals**: created with `new_signal ()`, accept at most one emission per instant.
-- **Aggregate signals**: created with `new_signal_agg ~initial ~combine`, may accumulate multiple emissions within a single instant by folding successive values using the provided combine function.
+- **Event signals** (`new_signal ()`) accept at most one emission per instant.
+- **Aggregate signals** (`new_signal_agg ~initial ~combine`) can accumulate multiple emissions in one instant using a combine function.
 
-Reactive programs are built from seven primitive operations:
+Reactive behavior is built from these primitive operations:
 
-- **`emit signal value`** marks signal as present in the current instant and delivers value. All tasks waiting on the signal are resumed, either immediately or at the next instant, depending on how they were suspended.
-- **`await signal`** suspends the current task until signal becomes present. The continuation always resumes at the beginning of the next instant, receiving the value carried by the signal.
-- **`await_immediate` signal** behaves like await, except that if the signal is already present, the continuation resumes within the same instant. To preserve determinism, await_immediate is restricted to event signals, which allow at most one emission per instant.
-- **`pause ()`** suspends the current task and schedules it for execution in the next instant.
-- **`parallel [p1; …; pn]`** executes all programs in the list concurrently within the same instant.
-- **`when_ guard body`** executes body only if guard is present in the current instant. Otherwise, the task is blocked and automatically resumes when the guard becomes present.
-- **`watch signal body`** executes body until signal is emitted. Such an emission causes body to be terminated at the end of the current instant, implementing weak preemption.
+- `emit signal value`  
+  Mark `signal` as present in the current instant and resume waiting tasks.
+- `await signal`  
+  Suspend until `signal` becomes present; resume at the beginning of the next instant.
+- `await_immediate signal`  
+  Resume in the same instant if already present, otherwise like `await`.  
+  For determinism this is restricted to event signals.
+- `pause ()`  
+  Suspend and resume at the next instant.
+- `parallel [p1; …; pn]`  
+  Run programs concurrently within the same instant.
+- `when_ guard body`  
+  Run `body` only when `guard` is present, otherwise the task is suspended.
+- `watch signal body`  
+  Run `body` until `signal` is emitted; preemption is applied at the end of the current instant.
 
---- 
-### Construct primitives
+## Install Tempo
 
-High-level reactive operators are available under `Tempo.Constructs`.
+### Requirements
 
-These constructs are built on top of the seven fundamental primitives.
+- OCaml >= 5.4.1
+- opam
+- dune >= 3
 
-- `after_n n body` — wait `n` logical instants, then run `body`.
-- `every_n n body` — run `body` every `n` logical instants forever.
-- `timeout n ~on_timeout body` — run `body` under weak preemption, cancel it after `n` instants, then run `on_timeout`.
-- `cooldown n s body` — run `body` when `s` is observed, then ignore subsequent occurrences for `n` instants.
-- `supervise_until stop body` — alias for a weak preemption scope (`watch stop body`).
+### Install from opam
 
-Example:
+```sh
+opam install tempo
+```
+
+Optional add-ons:
+
+```sh
+opam install tempo-raylib tempo-fluidsynth tempo-score
+```
+
+This is enough if you only want to consume Tempo in your own projects.
+
+## Quick start
+
+### Create and run a minimal application
+
+Create two files in a fresh folder (example: `./my-app`):
+
+1) `dune`
+
+```lisp
+(executable
+ (name my_app)
+ (modules my_app)
+ (libraries tempo))
+```
+
+2) `my_app.ml`
 
 ```ocaml
 open Tempo
 
-let tick = new_signal ()
-let heartbeat () = Constructs.every_n 10 (fun () -> emit tick ())
+let run _input _output =
+  let signal = new_signal () in
+  parallel [
+    (fun () ->
+       let value = await signal in
+       Format.printf "received %d@.%!" value);
+    (fun () -> emit signal 42)
+  ]
+
+let () = execute run
 ```
 
----
-
-### Control helpers
-
-A few helpers are built on top of the primitives and available under `Tempo.Constructs`:
-
-- `loop f` — repeat `f` forever with a `pause` between iterations.
-- `idle` — a `pause`-forever process.
-
----
-
-## Installation and build
-
-### Installation
-
-Requirements:
-
-- OCaml >= 5.3
-- dune >= 3
-- opam (recommended)
-
-From the repository root:
+Run it from this folder:
 
 ```sh
-opam install . --deps-only --with-test --with-doc
+# build the executable
+dune build ./my_app.exe
+
+# run it
+dune exec ./my_app.exe
 ```
 
-If you want to pin this local checkout:
+## Contributing
+
+From source:
 
 ```sh
-opam pin add tempo . --no-action
-opam install . --deps-only --with-test --with-doc
-```
+git clone <repo-url> tempo-dev
+cd tempo-dev
 
-Optional packages used by graphical applications:
+# install deps + docs/test dependencies
+opam install . --with-test --with-doc
 
-```sh
-opam install raylib
-opam install ./tempo-raylib.opam --deps-only
-opam install ./tempo-fluidsynth.opam ./tempo-score.opam --deps-only
-brew install fluid-synth   # macOS (needed for tempo-fluidsynth / music_score_player)
-```
-
----
-
-### Build
-
-Build everything:
-
-```sh
+# build + tests
 dune build
-```
-
-Build only the public library/installable targets:
-
-```sh
-dune build @install
-```
-
----
-
-### Run tests
-
-Run the full test suite:
-
-```sh
 dune runtest
-```
 
-Equivalent shorthand:
-
-```sh
-dune test
-```
-
-Run a single test executable:
-
-```sh
+# optional: run a single test executable
 dune exec tests/ok/emit_once_await_one.exe
-```
 
----
-
-## Documentation
-
-Generate API documentation:
-
-```sh
+# build API documentation
 dune build @doc
 ```
 
-Open the generated documentation index:
+Open local docs at:
 
-```sh
-open _build/default/_doc/_html/index.html      # macOS
-xdg-open _build/default/_doc/_html/index.html  # Linux
 ```
-
-The Tempo library entry page is:
-
-```text
 _build/default/_doc/_html/tempo/index.html
 ```
 
----
-
-## Demos
-
-### Run applications
-
-From repository root, use the project switch first:
-
-```sh
-eval $(opam env --switch 5.4.1+options --set-switch)
-```
-
-Then launch simple demos:
+## Simple demos
 
 ```sh
 sh applications/simple-demos/ca-continuous-raylib/run
@@ -201,101 +171,7 @@ sh applications/simple-demos/pendulums-raylib/run
 sh applications/simple-demos/solar-system-raylib/run
 ```
 
-Launch advanced applications:
-
-```sh
-sh applications/advanced/game-univ/run
-sh applications/advanced/tempo-core-studio/run
-sh applications/advanced/music_score_player/run
-```
-
----
-
-### Advanced applications: dependencies and Tempo libraries
-
-For advanced apps, install the runtime stack once:
-
-```sh
-opam install raylib
-opam install ./tempo-raylib.opam --deps-only
-opam install ./tempo-fluidsynth.opam ./tempo-score.opam --deps-only
-brew install fluid-synth   # macOS
-```
-
-If you want the Tempo libraries installed in your switch as opam packages:
-
-```sh
-opam pin add tempo . --no-action
-opam pin add tempo-raylib . --no-action
-opam pin add tempo-fluidsynth . --no-action
-opam pin add tempo-score . --no-action
-opam install tempo tempo-raylib tempo-fluidsynth tempo-score
-```
-
----
-
-## Quick start
-
-### Create and run your own Tempo application
-
-In your dune file:
-
-```lisp
-(executable
- (name my_app)
- (libraries tempo))
-```
-
-In your OCaml file:
-
-```ocaml
-open Tempo
-
-let program _input _output =
-  let s = new_signal () in
-  parallel [
-    (fun () ->
-       let v = await s in
-       Format.printf "received %d@." v);
-    (fun () -> emit s 42)
-  ]
-
-let () = execute program
-```
-
-Run it:
-
-```sh
-dune exec path/to/my_app.exe
-```
-
----
-
-### Logging and runtime flags
-
-Tempo supports runtime logging with CLI flags and environment variables.
-
-CLI:
-
-- `--log-level debug|info|warning|error|quiet`
-
-Environment variables:
-
-- `RML_LOG_LEVEL=debug|info|warning|error|off`
-- `RML_LOG_COLOR=0|1` (disable/enable ANSI colors)
-- `RML_TRACE_GUARDS=0|1` (extra guard tracing)
-
-Example:
-
-```sh
-RML_LOG_LEVEL=debug RML_TRACE_GUARDS=1 dune exec samples/awaiters_log.exe
-```
-
----
-
 ## Application screenshots
-
-### Simple demos
 
 `solar-system-raylib`  
 ![solar-system-raylib](docs/screenshots/solar-system-raylib.png)
@@ -311,14 +187,3 @@ RML_LOG_LEVEL=debug RML_TRACE_GUARDS=1 dune exec samples/awaiters_log.exe
 
 `cloth-raylib`  
 ![cloth-raylib](docs/screenshots/cloth-raylib.png)
-
-### Advanced applications
-
-`tempo-core-studio`  
-![tempo-core-studio](docs/screenshots/tempo-core-studio.png)
-
-`game-univ`  
-![game-univ](docs/screenshots/game-univ.png)
-
-`music-score-player`  
-![music-score-player](docs/screenshots/music-score-player.png)
