@@ -66,7 +66,12 @@ Reactive behavior is built from these primitive operations:
   Run `body` only when `guard` is present, otherwise suspend the task; return
   the value produced by `body` when it completes.
 - `watch signal body`  
-  Run `body` until `signal` is emitted; preemption is applied at the end of the current instant.
+  Run `body` under weak preemption. If `signal` is present at the end of the
+  current instant while the body is still active, stop the body and its
+  reactive descendants, then schedule the continuation after `watch` for the
+  next instant under its enclosing guards. A body that finishes normally
+  continues after `watch` in the same instant. Preemption discards suspended
+  continuations and does not guarantee that their cleanup handlers run.
 
 A delayed reactive body has the transparent type
 `'a Tempo.computation = unit -> 'a`. Tempo uses this name at control-scope

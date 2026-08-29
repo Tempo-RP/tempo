@@ -1,0 +1,4 @@
+normal=body:0,continuation:0
+preempted=body:0,continuation:1
+present=body:0,continuation:1
+guarded=preemption:1,continuation:3

@@ -11,8 +11,11 @@
   parallel
   pause
   watch_complete
+  watch_contract_timing
   watch_blocked_join
+  watch_descendants
   watch_emit_order
+  watch_exception
   watch_killed
   watch_nested
   watch_present_delayed

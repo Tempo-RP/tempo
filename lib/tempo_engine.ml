@@ -514,6 +514,16 @@ let handle_task : scheduler_state -> task -> unit =
         (unit, unit) continuation ->
         unit =
      fun s body k ->
+      (* Safety invariants for [watch]:
+         - schedule [body] through the task trampoline, including when an
+           ancestor already watches [s];
+         - resume or discontinue [k] under the caller's guards and kill
+           context, never under the body's new kill context;
+         - on normal or exceptional completion, disarm the watcher before
+           scheduling [k], so its one-shot continuation cannot be reused at
+           instant closure;
+         - preemption only schedules the normal next-instant continuation. It
+           deliberately does not discontinue killed body continuations. *)
       if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
         let current_task =
           match st.running_task with
@@ -541,15 +551,39 @@ let handle_task : scheduler_state -> task -> unit =
                 "watch elided exit (normal) | task=#%d" task.t_id
           | _ -> resume_spawn ()
         in
-        let elided_body resume =
-          body ();
-          if parent_alive () then resume ()
+        let discontinue_spawn exn backtrace =
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              (fun () -> discontinue_with_backtrace k exn backtrace)
+          in
+          dlog ~task:t.t_id "step"
+            "watch elided exit (exception) | task=#%d -> task=#%d"
+            t.t_id t'.t_id
+        in
+        let discontinue_stable exn backtrace =
+          match st.running_task with
+          | Some task when task.thread = parent_thread ->
+              task.retained <- true;
+              reset_task ~parent:task task parent_thread parent_guards
+                parent_kill_ctx
+                (fun () -> discontinue_with_backtrace k exn backtrace);
+              enqueue_now st task;
+              dlog ~task:task.t_id "step"
+                "watch elided exit (exception) | task=#%d" task.t_id
+          | _ -> discontinue_spawn exn backtrace
+        in
+        let elided_body resume discontinue =
+          match body () with
+          | () -> if parent_alive () then resume ()
+          | exception exn ->
+              let backtrace = Printexc.get_raw_backtrace () in
+              if parent_alive () then discontinue exn backtrace
         in
         if current_task.thread = parent_thread then begin
           current_task.retained <- true;
           reset_task ~parent:current_task current_task parent_thread parent_guards
             parent_kill_ctx
-            (fun () -> elided_body resume_stable);
+            (fun () -> elided_body resume_stable discontinue_stable);
           enqueue_now st current_task;
           dlog ~task:current_task.t_id ~signal:s.s_id "step"
             "watch elided (ancestor already watches signal) | task=#%d signal=#%d"
@@ -557,7 +591,7 @@ let handle_task : scheduler_state -> task -> unit =
         end else
           let t' =
             spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-              (fun () -> elided_body resume_spawn)
+              (fun () -> elided_body resume_spawn discontinue_spawn)
           in
           dlog ~task:t.t_id ~signal:s.s_id "step"
             "watch elided (ancestor already watches signal) | task=#%d signal=#%d -> task=#%d"
@@ -590,35 +624,51 @@ let handle_task : scheduler_state -> task -> unit =
               "watch exit (killed) | task=#%d -> task=#%d" t.t_id t'.t_id
           end
         in
+        let schedule_now_spawn outcome run =
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              run
+          in
+          dlog ~task:t.t_id "step"
+            "watch exit (%s) | task=#%d -> task=#%d" outcome t.t_id t'.t_id
+        in
+        let schedule_now_stable outcome run =
+          match st.running_task with
+          | Some task when task.thread = parent_thread ->
+              task.retained <- true;
+              reset_task ~parent:task task parent_thread parent_guards
+                parent_kill_ctx run;
+              enqueue_now st task;
+              dlog ~task:task.t_id "step"
+                "watch exit (%s) | task=#%d" outcome task.t_id
+          | _ -> schedule_now_spawn outcome run
+        in
         let resume_now () =
-          if close_watch () then begin
-            let t' =
-              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                (fun () -> continue k ())
-            in
-            dlog ~task:t.t_id "step"
-              "watch exit (normal) | task=#%d -> task=#%d" t.t_id t'.t_id
-          end
+          if close_watch () then
+            schedule_now_spawn "normal" (fun () -> continue k ())
         in
         let resume_now_stable () =
-          if close_watch () then begin
-            match st.running_task with
-            | Some task when task.thread = parent_thread ->
-                task.retained <- true;
-                reset_task ~parent:task task parent_thread parent_guards
-                  parent_kill_ctx
-                  (fun () -> continue k ());
-                enqueue_now st task;
-                dlog ~task:task.t_id "step"
-                  "watch exit (normal) | task=#%d" task.t_id
-            | _ -> resume_now ()
-          end
+          if close_watch () then
+            schedule_now_stable "normal" (fun () -> continue k ())
+        in
+        let discontinue_now exn backtrace =
+          if close_watch () then
+            schedule_now_spawn "exception" (fun () ->
+                discontinue_with_backtrace k exn backtrace)
+        in
+        let discontinue_now_stable exn backtrace =
+          if close_watch () then
+            schedule_now_stable "exception" (fun () ->
+                discontinue_with_backtrace k exn backtrace)
         in
         kk.cleanup <- Some resume_next;
         register_kill_watcher st s kk parent_kill_ctx;
-        let guarded_body resume =
-          body ();
-          resume ()
+        let guarded_body resume discontinue =
+          match body () with
+          | () -> resume ()
+          | exception exn ->
+              let backtrace = Printexc.get_raw_backtrace () in
+              discontinue exn backtrace
         in
         let body_kill_ctx =
           push_kill_context ~watch_signal_id:s.s_id kk parent_kill_ctx
@@ -627,14 +677,14 @@ let handle_task : scheduler_state -> task -> unit =
           current_task.retained <- true;
           reset_task ~parent:current_task current_task parent_thread parent_guards
             body_kill_ctx
-            (fun () -> guarded_body resume_now_stable);
+            (fun () -> guarded_body resume_now_stable discontinue_now_stable);
           enqueue_now st current_task;
           dlog ~task:current_task.t_id ~signal:s.s_id "step"
             "watch enter | task=#%d signal=#%d" current_task.t_id s.s_id
         end else
           let t' =
             spawn_now ~parent:t st parent_thread parent_guards body_kill_ctx
-              (fun () -> guarded_body resume_now)
+              (fun () -> guarded_body resume_now discontinue_now)
           in
           dlog ~task:t.t_id ~signal:s.s_id "step"
             "watch enter | task=#%d signal=#%d -> task=#%d"

@@ -201,12 +201,28 @@ val pause : unit -> unit
 val when_ :
   ('emit, 'agg, 'mode) signal_core -> 'result computation -> 'result
 
-(** {2 Cancellation } *)
+(** {2 Weak preemption } *)
 
-(** [watch s body] starts [body] in the current instant. If [s] is present at
-    instant closure and [body] has not yet finished, the runtime interrupts
-    [body] before the next instant so it never resumes. Effects already produced
-    by [body] in the closing instant remain visible. *)
+(** [watch s body] schedules [body] to start in the current instant under a
+    weak-preemption scope.
+
+    If [body] completes normally before instant closure, [watch] returns in the
+    same instant. If [s] is present at instant closure while [body] is still
+    active, the runtime stops [body] and its reactive descendants before the
+    next instant, then schedules the caller's continuation for that next
+    instant under its enclosing guards. Effects already produced by [body] in
+    the closing instant remain visible.
+
+    This rule also applies when [s] is already present at the call: [body] may
+    execute its current-instant prefix, but a suspended remainder does not run
+    in the next instant. Normal completion or an exception before closure wins
+    over preemption. An exception that exits the scheduled invocation of [body]
+    is re-raised at the [watch] call site with its original backtrace.
+
+    The [unit] result does not distinguish normal completion from preemption.
+    Preemption discards scheduled continuations; it does not unwind them.
+    Consequently, cleanup handlers such as [Fun.protect]'s [finally] callback
+    inside a preempted remainder are not guaranteed to run. *)
 val watch :
   ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
 
@@ -217,8 +233,8 @@ val watch :
     completed. If [parallel] itself is guarded with {!val:when_}, the entire
     composition is suspended whenever the guard is absent; none of the branches
     progress until the guard holds again. Likewise, wrapping [parallel] in
-    {!val:watch} causes every branch to be stopped together as soon as the
-    watched signal fires. *)
+    {!val:watch} causes every branch to be stopped together at instant closure,
+    before the next instant, if the watched signal is present. *)
 
 (** [parallel computations] starts each computation concurrently and waits for
     all of them to finish. *)
