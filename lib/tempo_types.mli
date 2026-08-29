@@ -168,6 +168,7 @@ type runtime_metrics = {
 type scheduler_state = {
     current : task_worklist
   ; next_instant : task_worklist
+  ; mutable pending_parallel_failures : (int * (unit -> unit)) list
   ; mutable blocked : task list
   ; mutable free_tasks : task list
   ; mutable retired_tasks : task list

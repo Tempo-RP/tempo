@@ -1,0 +1,3 @@
+direct_duplicate_caught=true direct_combine_caught=true
+duplicate_caught=true duplicate_sibling_suffix=false
+combine_caught=true combine_sibling_suffix=false

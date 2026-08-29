@@ -166,12 +166,12 @@ let update_signal : type emit agg mode.
       s.awaiters_kill_epoch <- kill_epoch;
       List.iter (fun aw -> resume_awaiter aw v) resumes
   | Aggregate_signal { combine; initial } ->
-      s.present <- true;
       let acc =
         match s.value with
         | None -> combine initial v
         | Some agg -> combine agg v
       in
+      s.present <- true;
       s.value <- Some acc);
   if not was_present then Tempo_task.bump_guard_epoch ();
   Tempo_task.wake_guard_waiters st s

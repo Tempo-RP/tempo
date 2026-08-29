@@ -122,10 +122,12 @@ val new_signal_agg :
 (** [emit s v] marks [s] as present in the current instant and propagates the
     value [v].
 
-    - For event signals, emitting twice in the same instant raises an exception.
+    - For event signals, emitting twice in the same instant raises an exception
+      at the [emit] call site.
     - For aggregate signals, [v] is combined with the current accumulator using
       the function supplied at creation time; awaiters only observe the final
-      accumulator value at the end of the instant. *)
+      accumulator value at the end of the instant. An exception raised by the
+      combine function is likewise re-raised at the [emit] call site. *)
 val emit : ('emit, 'agg, 'mode) signal_core -> 'emit -> unit
 
 (** {2 Signal status } *)
@@ -236,8 +238,26 @@ val watch :
     {!val:watch} causes every branch to be stopped together at instant closure,
     before the next instant, if the watched signal is present. *)
 
-(** [parallel computations] starts each computation concurrently and waits for
-    all of them to finish. *)
+(** [parallel computations] starts every computation in the current instant.
+    If all branches finish normally, it returns after all of them have
+    completed.
+
+    An exception escaping a branch triggers weak fail-fast termination. Tempo
+    first lets the current synchronous reaction reach quiescence, so sibling
+    branches may complete work that is already runnable in the failing instant.
+    It then stops every still-active branch and reactive descendant before any
+    of them can enter a later instant, and re-raises the exception at the
+    [parallel] call site in the same instant with its original backtrace.
+
+    If several branches of the same [parallel] fail before that barrier, the
+    exception from the lowest-indexed branch in [computations] is selected,
+    independently of their execution order. Nested failures cross [parallel]
+    scopes from the innermost scope outwards.
+
+    The failing branch's own OCaml stack is unwound normally. Stopping its
+    siblings is weak preemption: their suspended continuations are discarded,
+    not unwound, so cleanup handlers such as [Fun.protect]'s [finally] callback
+    in those continuations are not guaranteed to run. *)
 val parallel : unit computation list -> unit
 
 (** Runtime snapshot phase reported by {!val:execute} when [on_snapshot] is
@@ -318,6 +338,12 @@ type runtime_snapshot = private {
     {!type:computation}, it receives the two runtime-created signals. [input],
     [output], and [on_snapshot] are host callbacks; Tempo does not schedule them
     as reactive computations, and they must not perform Tempo effects.
+
+    An exception that escapes the top-level process terminates [execute]
+    immediately. In particular, if it escapes during reaction stepping, the
+    [output] callback and the remaining snapshot/finalization phases of that
+    instant are not run. Catch the exception inside the Tempo process when the
+    current instant must still be flushed to the host.
 
     When [on_snapshot] is provided, the runtime emits a snapshot at key points
     of each instant (before stepping, after stepping, after signal finalization,

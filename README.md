@@ -61,7 +61,13 @@ Reactive behavior is built from these primitive operations:
 - `pause ()`  
   Suspend and resume at the next instant.
 - `parallel [p1; …; pn]`  
-  Run programs concurrently within the same instant.
+  Start programs concurrently in the current instant and wait for all of them.
+  If an exception escapes a branch, finish the runnable work of the current
+  reaction, stop every branch before the next instant, and re-raise at the
+  `parallel` call site in the failing instant. If several branches fail, the
+  lowest list index wins. This is weak preemption: suspended sibling
+  continuations are discarded, so their cleanup handlers are not guaranteed to
+  run.
 - `when_ guard body`  
   Run `body` only when `guard` is present, otherwise suspend the task; return
   the value produced by `body` when it completes.

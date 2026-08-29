@@ -251,8 +251,11 @@ let handle_task : scheduler_state -> task -> unit =
      fun s v k ->
       dlog ~task:t.t_id ~signal:s.s_id "step"
         "emit | task=#%d signal=#%d" t.t_id s.s_id;
-      update_signal st s v;
-      continue k ()
+      match update_signal st s v with
+      | () -> continue k ()
+      | exception exn ->
+          let backtrace = Printexc.get_raw_backtrace () in
+          discontinue_with_backtrace k exn backtrace
     in
     let handle_await : type emit agg mode.
         (emit, agg, mode) signal_core -> (agg, unit) continuation -> unit =
@@ -415,47 +418,125 @@ let handle_task : scheduler_state -> task -> unit =
         | Some task -> task
         | None -> t
       in
-      let resume_spawn () =
-        let t' =
-          spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-            (fun () -> continue k ())
-        in
-        dlog ~task:t.t_id "step.parallel"
-          "parallel resume | parent task=#%d as task=#%d" t.t_id t'.t_id
-      in
-      let resume_stable () =
-        reset_task ~parent:current_task current_task parent_thread parent_guards
-          parent_kill_ctx
-          (fun () -> continue k ());
-        enqueue_now st current_task;
-        dlog ~task:current_task.t_id "step.parallel"
-          "parallel resume | parent task=#%d" current_task.t_id
-      in
       match procs with
       | [] -> continue k ()
       | _ ->
+          (* A parallel failure is weakly fail-fast. Branches keep running
+             until the current reaction reaches quiescence. The failure
+             barrier then kills their shared scope and discontinues [k] in the
+             same instant. Pending barriers are resolved deepest-first by
+             [stabilize_reaction], so nested failures cross one lexical
+             [parallel] boundary at a time. *)
           let parallel_thread = Tempo_thread.new_thread_id st in
-          List.iter
-            (fun proc ->
+          let parallel_kill = Tempo_low_level.new_kill () in
+          let parallel_kill_ctx =
+            push_kill_context parallel_kill parent_kill_ctx
+          in
+          let failure = ref None in
+          let failure_registered = ref false in
+          let settled = ref false in
+          let close_parallel () =
+            if !settled then false
+            else begin
+              settled := true;
+              parallel_kill.alive := false;
+              parallel_kill.cleanup <- None;
+              true
+            end
+          in
+          let failure_action () =
+            match !failure with
+            | None -> invalid_arg "parallel failure barrier without exception"
+            | Some (_, exn, backtrace) ->
+                discontinue_with_backtrace k exn backtrace
+          in
+          let schedule_spawn outcome action =
+            let t' =
+              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+                action
+            in
+            dlog ~task:t.t_id "step.parallel"
+              "parallel resume (%s) | parent task=#%d as task=#%d"
+              outcome t.t_id t'.t_id
+          in
+          let schedule_stable outcome action =
+            current_task.retained <- true;
+            reset_task ~parent:current_task current_task parent_thread
+              parent_guards parent_kill_ctx action;
+            enqueue_now st current_task;
+            dlog ~task:current_task.t_id "step.parallel"
+              "parallel resume (%s) | parent task=#%d" outcome
+              current_task.t_id
+          in
+          let resume_spawn () =
+            if close_parallel () then
+              schedule_spawn "normal" (fun () -> continue k ())
+          in
+          let resume_stable () =
+            if close_parallel () then
+              schedule_stable "normal" (fun () -> continue k ())
+          in
+          let fail_spawn () =
+            if close_parallel () && parent_alive () then
+              schedule_spawn "exception" failure_action
+          in
+          let fail_stable () =
+            if close_parallel () && parent_alive () then
+              schedule_stable "exception" failure_action
+          in
+          let stable_parent = current_task.thread = parent_thread in
+          parallel_kill.cleanup <-
+            Some (if stable_parent then fail_stable else fail_spawn);
+          let resolve_failure () =
+            if not !settled then
+              if parent_alive () then Tempo_low_level.abort_kill parallel_kill
+              else ignore (close_parallel ())
+          in
+          let record_failure index exn backtrace =
+            (match !failure with
+            | Some (recorded_index, _, _) when recorded_index <= index -> ()
+            | None | Some _ -> failure := Some (index, exn, backtrace));
+            if not !failure_registered then begin
+              failure_registered := true;
+              let depth = kill_context_depth parallel_kill_ctx in
+              st.pending_parallel_failures <-
+                (depth, resolve_failure) :: st.pending_parallel_failures
+            end
+          in
+          List.iteri
+            (fun index proc ->
+              let guarded_proc () =
+                match proc () with
+                | () -> ()
+                | exception exn ->
+                    let backtrace = Printexc.get_raw_backtrace () in
+                    record_failure index exn backtrace
+              in
               let child =
                 spawn_now ~parent:t st parallel_thread parent_guards
-                  parent_kill_ctx proc
+                  parallel_kill_ctx guarded_proc
               in
               dlog ~task:t.t_id "step.parallel"
                 "parallel spawn | parent task=#%d thread=#%d child task=#%d"
                 t.t_id parallel_thread child.t_id)
             procs;
-          if current_task.thread = parent_thread then begin
+          let join_complete resume =
+            match !failure with
+            | None -> resume ()
+            | Some _ -> ()
+          in
+          if stable_parent then begin
             current_task.retained <- true;
             add_stable_join_waiter st.threads parallel_thread
-              ~kill_ctx:parent_kill_ctx
-              ~cancel:(fun () -> dispose_task st current_task)
-              resume_stable
+              ~kill_ctx:parallel_kill_ctx
+              ~cancel:(fun () ->
+                if not !settled then dispose_task st current_task)
+              (fun () -> join_complete resume_stable)
           end else begin
             mark_suspended st.threads parent_thread;
             add_spawn_join_waiter st.threads parallel_thread
-              ~waiter_thread:parent_thread ~kill_ctx:parent_kill_ctx
-              resume_spawn
+              ~waiter_thread:parent_thread ~kill_ctx:parallel_kill_ctx
+              (fun () -> join_complete resume_spawn)
           end
     in
     let handle_when : type emit agg mode result.
@@ -781,6 +862,22 @@ let rec step : scheduler_state -> unit =
           record_step_metrics ();
           continue ()
 
+let rec stabilize_reaction (st : scheduler_state) =
+  step st;
+  match st.pending_parallel_failures with
+  | [] -> ()
+  | pending ->
+      let deepest =
+        List.fold_left (fun acc (depth, _) -> max acc depth) min_int pending
+      in
+      let current_wave, later =
+        List.partition (fun (depth, _) -> depth = deepest) pending
+      in
+      st.pending_parallel_failures <- later;
+      List.iter (fun (_, resolve) -> resolve ()) (List.rev current_wave);
+      prune_dead_join_waiters st.threads (current_kill_epoch ());
+      stabilize_reaction st
+
 let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
     (unit -> unit) -> scheduler_state -> int option -> unit =
   fun on_snapshot before_step after_step st remaining ->
@@ -803,7 +900,7 @@ let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
         st.retired_tasks <- [];
         emit_snapshot on_snapshot st `Before_step;
         before_step ();
-        step st;
+        stabilize_reaction st;
         after_step ();
         emit_snapshot on_snapshot st `After_step;
         (match counter with
@@ -873,6 +970,7 @@ let create_scheduler_state () =
   in
   { current         = create_worklist ()
     ;next_instant    = create_worklist ()
+    ;pending_parallel_failures = []
     ;blocked         = []
     ;free_tasks      = []
     ;retired_tasks   = []

@@ -9,6 +9,10 @@
   emit_once_await_many
   emit_once_await_one
   parallel
+  parallel_exception_contract
+  parallel_exception_lifecycle
+  parallel_exception_primitives
+  parallel_exception_scopes
   pause
   watch_complete
   watch_contract_timing

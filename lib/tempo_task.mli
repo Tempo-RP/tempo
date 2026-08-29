@@ -24,6 +24,7 @@ val push_kill_context :
   ?watch_signal_id:int -> kill -> kill_context -> kill_context
 val kill_context_alive : kill_context -> bool
 val kill_context_has_watch_signal : kill_context -> int -> bool
+val kill_context_depth : kill_context -> int
 val kill_effectively_alive : kill -> bool
 val task_guards : task -> any_signal list
 val task_kill_ctx : task -> kill_context
