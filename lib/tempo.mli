@@ -194,9 +194,12 @@ val pause : unit -> unit
     instant. If [g] is absent, the task is blocked intra-instant and may
     be resumed later in the same instant if [g] is emitted.
 
-    Nested calls to [when_] correspond to a conjunction of guards.*)
+    Nested calls to [when_] correspond to a conjunction of guards. When [body]
+    completes normally, its result is returned and execution continues outside
+    the guarded scope. An exception raised by [body] is re-raised at the
+    [when_] call site. *)
 val when_ :
-  ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
+  ('emit, 'agg, 'mode) signal_core -> 'result computation -> 'result
 
 (** {2 Cancellation } *)
 

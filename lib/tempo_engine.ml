@@ -458,10 +458,10 @@ let handle_task : scheduler_state -> task -> unit =
               resume_spawn
           end
     in
-    let handle_when : type emit agg mode.
+    let handle_when : type emit agg mode result.
         (emit, agg, mode) signal_core ->
-        (unit -> unit) ->
-        (unit, unit) continuation ->
+        (unit -> result) ->
+        (result, unit) continuation ->
         unit =
      fun s body k ->
       (* Safety invariant for [when_]:
@@ -470,19 +470,26 @@ let handle_task : scheduler_state -> task -> unit =
            the scheduler task trampoline;
          - always keep [s] in the scheduled task guard set, even if [s] is
            already present, so continuations after pause/await stay guarded
-           in later instants. *)
+           in later instants;
+         - resume [k] with the body's result, or discontinue it with the body's
+           exception, so the caller continues under its original guard set. *)
       let current_task =
         match st.running_task with
         | Some task -> task
         | None -> t
       in
       let guarded_run () =
-        body ();
-        if parent_alive () then begin
-          dlog ~task:current_task.t_id "step"
-            "when exit | task=#%d -> continue" current_task.t_id;
-          continue k ()
-        end
+        match body () with
+        | result ->
+            if parent_alive () then begin
+              dlog ~task:current_task.t_id "step"
+                "when exit | task=#%d -> continue" current_task.t_id;
+              continue k result
+            end
+        | exception exn ->
+            let backtrace = Printexc.get_raw_backtrace () in
+            if parent_alive () then
+              discontinue_with_backtrace k exn backtrace
       in
       if current_task.thread = parent_thread then begin
         current_task.retained <- true;

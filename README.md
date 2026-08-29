@@ -63,7 +63,8 @@ Reactive behavior is built from these primitive operations:
 - `parallel [p1; …; pn]`  
   Run programs concurrently within the same instant.
 - `when_ guard body`  
-  Run `body` only when `guard` is present, otherwise the task is suspended.
+  Run `body` only when `guard` is present, otherwise suspend the task; return
+  the value produced by `body` when it completes.
 - `watch signal body`  
   Run `body` until `signal` is emitted; preemption is applied at the end of the current instant.
 

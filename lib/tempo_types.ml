@@ -190,8 +190,8 @@ type _ Effect.t +=
   | Pause : unit Effect.t
   | Parallel : (unit -> unit) list -> unit Effect.t
   | When :
-      ('emit, 'agg, 'mode) signal_core * (unit -> unit)
-      -> unit Effect.t
+      ('emit, 'agg, 'mode) signal_core * (unit -> 'result)
+      -> 'result Effect.t
   | Watch :
       ('emit, 'agg, 'mode) signal_core * (unit -> unit)
       -> unit Effect.t

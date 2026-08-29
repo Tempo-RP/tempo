@@ -29,6 +29,12 @@
   when_nested
   when_next_instant
   when_parallel
+  when_result_await
+  when_result_exception
+  when_result_immediate
+  when_result_late_guard
+  when_result_nested
+  when_result_suspended
   when_same_instant
   when_tick_tock)
  (libraries tempo))

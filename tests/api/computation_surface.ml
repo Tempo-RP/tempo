@@ -1,7 +1,7 @@
 let delay (body : unit -> 'a) : 'a Tempo.computation = body
 let expose (body : 'a Tempo.computation) : unit -> 'a = body
 let (_ : unit Tempo.computation list -> unit) = Tempo.parallel
-let (_ : int Tempo.signal -> unit Tempo.computation -> unit) = Tempo.when_
+let (_ : int Tempo.signal -> 'a Tempo.computation -> 'a) = Tempo.when_
 let (_ : int Tempo.signal -> unit Tempo.computation -> unit) = Tempo.watch
 
 let (_ :

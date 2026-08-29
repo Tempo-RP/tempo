@@ -23,8 +23,9 @@ let await : type emit agg mode. (emit, agg, mode) signal_core -> agg =
 let await_immediate : 'a signal -> 'a = fun s -> perform (Await_immediate s)
 let pause : unit -> unit = fun () -> perform Pause
 
-let when_ (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
-  perform (When (s, body))
+let when_ : type emit agg mode result.
+    (emit, agg, mode) signal_core -> (unit -> result) -> result =
+ fun s body -> perform (When (s, body))
 
 let watch (s : ('emit, 'agg, 'mode) signal_core) (body : unit -> unit) : unit =
   perform (Watch (s, body))
