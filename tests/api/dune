@@ -1,0 +1,9 @@
+(test
+ (name public_surface)
+ (libraries tempo))
+
+(rule
+ (alias runtest)
+ (deps check_private_modules.sh)
+ (action
+  (run sh %{dep:check_private_modules.sh} %{lib:tempo:tempo.cmi})))

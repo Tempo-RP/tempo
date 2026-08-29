@@ -53,22 +53,28 @@
     distinguish single-emission (event) signals from aggregate signals while
     still sharing the same primitives. *)
 
-(** Generalized signal type. ['emit] is the type of values passed to [emit],
-    ['agg] is the value observed by [await] (equal to ['emit] for events, but
-    possibly different for aggregates), and ['mode] encodes the signal flavour
-    using the phantom markers below. *)
-type ('emit, 'agg, 'mode) signal_core =
-  ('emit, 'agg, 'mode) Tempo_types.signal_core
+(** Abstract marker for single-emission event signals. *)
+type event
+
+(** Abstract marker for aggregate signals. *)
+type aggregate
+
+(** Generalized abstract signal type. ['emit] is the type of values passed to
+    [emit], ['observe] is the value observed by [await] (equal to ['emit] for
+    events, but possibly different for aggregates), and ['kind] encodes the
+    signal flavour. The runtime representation is intentionally hidden. *)
+type ('emit, 'observe, 'kind) signal_core
 
 (** A value of type ['a signal] represents a single-emission signal (at most one
     [emit] per instant) carrying values of type ['a]. Attempts to emit twice in
     the same instant raise [Invalid_argument]. *)
-type 'a signal = ('a, 'a, Tempo_types.event) signal_core
+type 'a signal = ('a, 'a, event) signal_core
 
 (** Aggregate signals can be emitted several times per instant; their values
     are combined using the user-provided accumulator before the aggregated value
     is made visible for the next instant. *)
-type ('emit, 'agg) agg_signal = ('emit, 'agg, Tempo_types.aggregate) signal_core
+type ('emit, 'observe) agg_signal =
+  ('emit, 'observe, aggregate) signal_core
 
 (** {1 Signal creation} *)
 
@@ -210,11 +216,67 @@ module Constructs : sig
   val idle : unit -> 'a
 end
 
-(** Runtime snapshot phase reported by {!val:execute} when [on_snapshot] is provided. *)
-type snapshot_phase = Tempo_engine.snapshot_phase
+(** Runtime snapshot phase reported by {!val:execute} when [on_snapshot] is
+    provided. *)
+type snapshot_phase =
+  [ `Before_step
+  | `After_step
+  | `After_finalize
+  | `After_rollover
+  ]
 
-(** Snapshot of scheduler and GC counters for one instant phase. *)
-type runtime_snapshot = Tempo_engine.runtime_snapshot
+(** Immutable snapshot of scheduler and GC counters for one instant phase.
+    Fields are readable by clients, but only the runtime can construct a
+    snapshot. *)
+type runtime_snapshot = private {
+    phase : snapshot_phase
+  ; instant : int
+  ; step : int
+  ; current_q : int
+  ; blocked_q : int
+  ; next_q : int
+  ; tracked_signals : int
+  ; awaiters : int
+  ; guard_waiters : int
+  ; kill_watchers : int
+  ; live_tasks : int
+  ; kill_context_refs : int
+  ; kill_context_nodes : int
+  ; kill_context_max_depth : int
+  ; active_thread_slots : int
+  ; total_active_threads : int
+  ; total_suspended_threads : int
+  ; task_counter : int
+  ; thread_counter : int
+  ; signal_counter : int
+  ; free_task_count : int
+  ; gc_minor_words : float
+  ; gc_promoted_words : float
+  ; gc_major_words : float
+  ; gc_minor_collections : int
+  ; gc_major_collections : int
+  ; gc_heap_words : int
+  ; gc_live_words : int
+  ; gc_free_words : int
+  ; gc_top_heap_words : int
+  ; gc_stack_size : int
+  ; cum_tasks_created : int
+  ; cum_tasks_disposed : int
+  ; cum_tasks_enqueued_now : int
+  ; cum_tasks_enqueued_next : int
+  ; cum_tasks_blocked : int
+  ; cum_signals_created : int
+  ; cum_signals_tracked : int
+  ; cum_signals_untracked : int
+  ; cum_awaiters_registered : int
+  ; cum_awaiters_resumed : int
+  ; cum_awaiters_pruned : int
+  ; cum_guard_waiter_registrations : int
+  ; cum_guard_waiter_wakeups : int
+  ; cum_kill_watchers_registered : int
+  ; cum_kill_watchers_fired : int
+  ; cum_kill_watchers_pruned : int
+}
 
 (** [execute ?instants ?input ?output ?on_snapshot main] starts the synchronous
     execution of a
