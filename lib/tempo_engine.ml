@@ -221,6 +221,18 @@ let handle_task : scheduler_state -> task -> unit =
         Tempo_log.log ?task ?signal (ctx) scope fmt
       else Format.ifprintf Format.std_formatter fmt
     in
+    let handle_owned_signal : type emit agg mode result.
+        (emit, agg, mode) signal_core ->
+        (result, unit) continuation ->
+        (unit -> unit) ->
+        unit =
+     fun s k handle ->
+      match Tempo_task.ensure_signal_owner st s with
+      | () -> handle ()
+      | exception exn ->
+          let backtrace = Printexc.get_raw_backtrace () in
+          discontinue_with_backtrace k exn backtrace
+    in
     let handle_done () =
       dlog ~task:t.t_id "step" "task done | task=#%d thread=#%d" t.t_id t.thread
     in
@@ -690,8 +702,7 @@ let handle_task : scheduler_state -> task -> unit =
           if !resumed then false
           else begin
             resumed := true;
-            kk.alive := false;
-            kk.cleanup <- None;
+            disarm_kill_watcher st s kk;
             true
           end
         in
@@ -779,16 +790,21 @@ let handle_task : scheduler_state -> task -> unit =
       | effect (New_signal ()), k -> handle_new_signal k
       | effect (New_signal_agg (initial, combine)), k ->
           handle_new_signal_agg initial combine k
-      | effect (Emit (s, v)), k -> handle_emit s v k
+      | effect (Emit (s, v)), k ->
+          handle_owned_signal s k (fun () -> handle_emit s v k)
       (* Suspension / resumption on signals *)
-      | effect (Await s), k -> handle_await s k
-      | effect (Await_immediate s), k -> handle_await_immediate s k
+      | effect (Await s), k ->
+          handle_owned_signal s k (fun () -> handle_await s k)
+      | effect (Await_immediate s), k ->
+          handle_owned_signal s k (fun () -> handle_await_immediate s k)
       (* Scheduling and thread control *)
       | effect Pause, k -> handle_pause k
       | effect (Parallel procs), k -> handle_parallel procs k
       (* Guarded and preemptive control operators *)
-      | effect (When (s, body)), k -> handle_when s body k
-      | effect (Watch (s, body)), k -> handle_watch s body k
+      | effect (When (s, body)), k ->
+          handle_owned_signal s k (fun () -> handle_when s body k)
+      | effect (Watch (s, body)), k ->
+          handle_owned_signal s k (fun () -> handle_watch s body k)
     in
     let cleanup () =
       if t.generation = generation && not t.retained then dispose_task st t
@@ -968,8 +984,9 @@ let create_scheduler_state () =
       ; kill_watchers_pruned = 0
       }
   in
-  { current         = create_worklist ()
-    ;next_instant    = create_worklist ()
+  { runtime_token   = { active = Atomic.make true }
+    ;current        = create_worklist ()
+    ;next_instant   = create_worklist ()
     ;pending_parallel_failures = []
     ;blocked         = []
     ;free_tasks      = []
@@ -989,22 +1006,26 @@ let create_scheduler_state () =
 let execute ?instants ?(input = fun () -> None) ?(output = fun _ -> ())
     ?on_snapshot initial =
   let st = create_scheduler_state () in
-  let input_signal = fresh_event_signal st in
-  let output_signal = fresh_event_signal st in
-  let before_step () =
-    match input () with
-    | None -> ()
-    | Some payload -> emit_event_from_host st input_signal payload
-  in
-  let after_step () =
-      match output_signal.value with
-      | Some value -> output value
-      | None -> ()
-  in
-  let thread = Tempo_thread.new_thread_id st in
-  ignore
-    (spawn_now st thread [] empty_kill_context
-       (fun () -> initial input_signal output_signal));
-  Tempo_log.log_banner (log_ctx st) "execute" "runtime start | schedule initial task=#%d";
-  run_instant on_snapshot before_step after_step st instants;
-  Tempo_log.log_duration_summary ()
+  Fun.protect
+    ~finally:(fun () -> Tempo_signal.close_runtime st)
+    (fun () ->
+      let input_signal = fresh_event_signal st in
+      let output_signal = fresh_event_signal st in
+      let before_step () =
+        match input () with
+        | None -> ()
+        | Some payload -> emit_event_from_host st input_signal payload
+      in
+      let after_step () =
+        match output_signal.value with
+        | Some value -> output value
+        | None -> ()
+      in
+      let thread = Tempo_thread.new_thread_id st in
+      ignore
+        (spawn_now st thread [] empty_kill_context
+           (fun () -> initial input_signal output_signal));
+      Tempo_log.log_banner (log_ctx st) "execute"
+        "runtime start | schedule initial task=#%d";
+      run_instant on_snapshot before_step after_step st instants;
+      Tempo_log.log_duration_summary ())

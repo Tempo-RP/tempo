@@ -20,6 +20,13 @@
 - Made signal emission failures observable in direct style at the `emit` call
   site.
 
+### Fixed
+- Bound every signal to its creating `execute` invocation, reject foreign or
+  expired signals at the direct-style call site, and detach pending runtime
+  registrations whenever `execute` returns.
+- Prune completed `watch` scopes at instant finalization so dead kill watchers
+  do not accumulate on long-lived absent signals.
+
 ### Removed
 - Removed the unstable public `Constructs` compatibility module.
 

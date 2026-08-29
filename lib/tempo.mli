@@ -81,6 +81,16 @@ type aggregate
     signal flavour. The runtime representation is intentionally hidden. *)
 type ('emit, 'observe, 'kind) signal_core
 
+(** Every signal belongs to the particular {!val:execute} invocation in which
+    it was created. This includes the input and output signals passed to the
+    top-level process. A nested or later [execute] invocation is a different
+    execution, even when it runs on the same OCaml Domain.
+
+    Signals may be stored in ordinary OCaml values, but applying {!val:emit},
+    {!val:await}, {!val:await_immediate}, {!val:when_}, or {!val:watch} from a
+    different execution, or after the owning execution has returned, raises
+    [Invalid_argument] at that operation's call site. *)
+
 (** A value of type ['a signal] represents a single-emission signal (at most one
     [emit] per instant) carrying values of type ['a]. Attempts to emit twice in
     the same instant raise [Invalid_argument]. *)
@@ -344,6 +354,11 @@ type runtime_snapshot = private {
     [output] callback and the remaining snapshot/finalization phases of that
     instant are not run. Catch the exception inside the Tempo process when the
     current instant must still be flushed to the host.
+
+    When [execute] returns, normally or exceptionally, all suspended
+    continuations owned by that invocation are abandoned and its signals
+    expire. Shutdown does not unwind those suspended continuations and does not
+    guarantee execution of cleanup handlers stored in them.
 
     When [on_snapshot] is provided, the runtime emits a snapshot at key points
     of each instant (before stepping, after stepping, after signal finalization,

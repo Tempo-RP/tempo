@@ -49,6 +49,12 @@ Tempo supports two kinds of signals:
 - **Event signals** (`new_signal ()`) accept at most one emission per instant.
 - **Aggregate signals** (`new_signal_agg ~initial ~combine`) can accumulate multiple emissions in one instant using a combine function.
 
+Every signal belongs to the particular `execute` invocation that created it,
+including the host input and output signals. It remains an ordinary storable
+OCaml value, but Tempo operations reject it with `Invalid_argument` from a
+nested/later execution or after its owning execution has returned. Returning
+from `execute` abandons pending continuations without unwinding them.
+
 Reactive behavior is built from these primitive operations:
 
 - `emit signal value`  

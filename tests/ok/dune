@@ -15,6 +15,8 @@
   parallel_exception_primitives
   parallel_exception_scopes
   pause
+  signal_runtime_ownership
+  signal_runtime_teardown
   watch_complete
   watch_contract_timing
   watch_blocked_join
@@ -26,6 +28,7 @@
   watch_present_delayed
   watch_when_complete
   watch_when_killed
+  watch_watcher_cleanup
   when_guard_scope_after_pause
   when_present_await_immediate_safe
   when_await_imm_next_instant

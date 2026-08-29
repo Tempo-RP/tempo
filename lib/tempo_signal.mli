@@ -38,6 +38,12 @@ val register_kill_watcher :
   -> Tempo_types.kill_context
   -> unit
 
+val disarm_kill_watcher :
+     Tempo_types.scheduler_state
+  -> ('emit, 'agg, 'mode) Tempo_types.signal_core
+  -> Tempo_types.kill
+  -> unit
+
 val update_signal :
      Tempo_types.scheduler_state
   -> ('emit, 'agg, 'mode) Tempo_types.signal_core
@@ -51,3 +57,4 @@ val emit_event_from_host :
   -> unit
 
 val finalize_signals : Tempo_types.scheduler_state -> unit
+val close_runtime : Tempo_types.scheduler_state -> unit
