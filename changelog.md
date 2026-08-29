@@ -1,3 +1,27 @@
+## [0.3.0] - Unreleased
+
+### Added
+- Added the optional `tempo-ppx` package and the
+  `[%tempo.parallel [branch; ...]]` syntax for static parallel compositions.
+- Added the transparent `'a computation = unit -> 'a` name for delayed Tempo
+  control bodies.
+- Added public API compile checks and precise behavioral tests for guarded,
+  preemptive, and parallel control scopes.
+
+### Changed
+- Made signal and runtime representations private implementation details.
+- Generalized `when_` so a normally completed guarded computation returns its
+  result.
+- Defined `watch` as weak preemption and documented its timing and cleanup
+  limitations.
+- Made exceptions escaping `parallel` branches weakly fail-fast, deterministic
+  by branch index, and catchable at the lexical call site in the same instant.
+- Made signal emission failures observable in direct style at the `emit` call
+  site.
+
+### Removed
+- Removed the unstable public `Constructs` compatibility module.
+
 ## [0.2.1] - 2026-08-06
 
 ### Added

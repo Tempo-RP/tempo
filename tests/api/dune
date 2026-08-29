@@ -1,13 +1,16 @@
 (test
  (name public_surface)
+ (package tempo)
  (libraries tempo))
 
 (test
  (name computation_surface)
+ (package tempo)
  (libraries tempo))
 
 (rule
  (alias runtest)
+ (package tempo)
  (deps check_private_modules.sh)
  (action
   (run sh %{dep:check_private_modules.sh} %{lib:tempo:tempo.cmi})))

@@ -1,4 +1,5 @@
 (tests
+ (package tempo)
  (names
   await_fixpoint
   await_agg_same_instant

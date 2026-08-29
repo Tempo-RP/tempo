@@ -101,13 +101,61 @@ parallel [
 `pause ()` keeps one because `unit` is its ordinary argument, not because it is
 a delayed computation.
 
+### Optional PPX syntax
+
+Tempo 0.3 provides the optional `tempo-ppx` package. Enable it only in modules
+that use the syntax extension:
+
+```dune
+(executable
+ (name my_app)
+ (libraries tempo)
+ (preprocess
+  (pps tempo-ppx)))
+```
+
+A parallel composition whose branches are known syntactically can then be
+written without visible thunks:
+
+```ocaml
+[%tempo.parallel
+  [ emit signal 42
+  ; let value = await signal in
+    Format.printf "received %d@.%!" value
+  ]]
+```
+
+It expands to the ordinary library call:
+
+```ocaml
+Tempo.parallel
+  [ (fun () -> emit signal 42)
+  ; (fun () ->
+      let value = await signal in
+      Format.printf "received %d@.%!" value)
+  ]
+```
+
+The payload must be a literal OCaml list. Keep the direct
+`Tempo.parallel computations` API for a list assembled dynamically. An
+ordinary function still requires its normal application inside a branch, for
+example `worker ()`; immediate Tempo operations such as `emit signal value`
+do not gain an extra application.
+
+The spelling `parallel%tempo [...]` is deliberately not provided: OCaml parses
+it as an application of the infix `%` operator, not as a PPX extension point.
+The PPX marks each generated closure with the internal
+`tempo.parallel_branch` attribute and preserves the branch's source location so
+later typed-tree tooling can identify the boundary. This marker is descriptive;
+it is not by itself a static safety proof.
+
 ## Install Tempo
 
 ### Requirements
 
 - OCaml >= 5.4.1
 - opam
-- dune >= 3
+- dune >= 3.19
 
 ### Install from opam
 
@@ -118,6 +166,7 @@ opam install tempo
 Optional add-ons:
 
 ```sh
+opam install tempo-ppx       # lightweight syntax extensions
 opam install tempo-raylib tempo-fluidsynth tempo-score
 ```
 
