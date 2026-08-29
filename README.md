@@ -136,18 +136,56 @@ Tempo.parallel
   ]
 ```
 
-The payload must be a literal OCaml list. Keep the direct
+Single-body control scopes use an application-shaped payload. The extension
+name is `tempo.when`; the library function is named `Tempo.when_` only because
+`when` is an OCaml keyword:
+
+```ocaml
+let result =
+  [%tempo.when guard
+    (let value = await payload in
+     value + 1)]
+in
+[%tempo.watch stop
+  (service ();
+   pause ())]
+```
+
+These forms expand respectively to:
+
+```ocaml
+let result =
+  Tempo.when_ guard (fun () ->
+      let value = await payload in
+      value + 1)
+in
+Tempo.watch stop (fun () ->
+    service ();
+    pause ())
+```
+
+The PPX requires exactly one syntactic body argument after the signal. An
+atomic body needs no grouping (`[%tempo.when guard value]`); every compound
+body must be enclosed in parentheses or `begin ... end`. For example,
+`[%tempo.when guard emit signal value]` is rejected as an ambiguous
+multi-argument payload; write `[%tempo.when guard (emit signal value)]`.
+A computed signal expression must likewise be grouped, as in
+`[%tempo.when (select_guard key) body]`.
+
+For `tempo.parallel`, the payload must be a literal OCaml list. Keep the direct
 `Tempo.parallel computations` API for a list assembled dynamically. An
-ordinary function still requires its normal application inside a branch, for
-example `worker ()`; immediate Tempo operations such as `emit signal value`
-do not gain an extra application.
+ordinary function still requires its normal application inside every generated
+body, for example `worker ()`; otherwise `tempo.when` can legitimately return
+the function value. Immediate Tempo operations such as `emit signal value` do
+not gain an extra application.
 
 The spelling `parallel%tempo [...]` is deliberately not provided: OCaml parses
 it as an application of the infix `%` operator, not as a PPX extension point.
-The PPX marks each generated closure with the internal
-`tempo.parallel_branch` attribute and preserves the branch's source location so
-later typed-tree tooling can identify the boundary. This marker is descriptive;
-it is not by itself a static safety proof.
+The PPX marks generated closures with the internal attributes
+`tempo.parallel_branch`, `tempo.when_body`, and `tempo.watch_body`, preserving
+each body's source location so later typed-tree tooling can identify the
+boundaries. These markers are descriptive; they are not by themselves a static
+safety proof.
 
 ## Install Tempo
 

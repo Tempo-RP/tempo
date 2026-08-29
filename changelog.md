@@ -2,7 +2,8 @@
 
 ### Added
 - Added the optional `tempo-ppx` package and the
-  `[%tempo.parallel [branch; ...]]` syntax for static parallel compositions.
+  `[%tempo.parallel [branch; ...]]`, `[%tempo.when guard body]`, and
+  `[%tempo.watch signal body]` syntaxes for delayed control computations.
 - Added the transparent `'a computation = unit -> 'a` name for delayed Tempo
   control bodies.
 - Added public API compile checks and precise behavioral tests for guarded,
