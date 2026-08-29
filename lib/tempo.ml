@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *---------------------------------------------------------------------------*)
 
+type 'a computation = unit -> 'a
 type event = Tempo_types.event
 type aggregate = Tempo_types.aggregate
 

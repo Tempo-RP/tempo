@@ -34,6 +34,22 @@
     
     *)
 
+(** {1 Computations} *)
+
+(** A name for a delayed OCaml computation passed to a Tempo control operator.
+
+    This is a transparent type abbreviation: [(fun () -> body)] is already a
+    computation and no constructor is required. It introduces vocabulary, not a
+    distinct runtime representation or a static guarantee. The name marks API
+    boundaries where Tempo decides when or under which reactive control scope
+    [body] starts. Effects such as {!val:pause} still require an enclosing
+    {!val:execute}.
+
+    Immediate operations keep their ordinary direct-style signatures. For
+    example, [emit signal value], [await signal], and [pause ()] execute at the
+    current point of the surrounding computation. *)
+type 'a computation = unit -> 'a
+
 (** {1 Signals }
     Signals are the primary communication mechanism between tasks.
     They come in two flavours:
@@ -94,7 +110,8 @@ val new_signal : unit -> 'a signal
     {!val:await_immediate} is unavailable because their combined value is only
     produced at the end of the instant. If several tasks may emit concurrently,
     [combine] must make accumulation independent of emission order to retain
-    scheduler-order determinism. *)
+    scheduler-order determinism. [combine] is a synchronous runtime callback,
+    not a Tempo computation, and must not perform Tempo effects. *)
 val new_signal_agg :
   initial:'agg -> combine:('agg -> 'emit -> 'agg) -> ('emit, 'agg) agg_signal
 
@@ -178,7 +195,8 @@ val pause : unit -> unit
     be resumed later in the same instant if [g] is emitted.
 
     Nested calls to [when_] correspond to a conjunction of guards.*)
-val when_ : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
+val when_ :
+  ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
 
 (** {2 Cancellation } *)
 
@@ -186,7 +204,8 @@ val when_ : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
     instant closure and [body] has not yet finished, the runtime interrupts
     [body] before the next instant so it never resumes. Effects already produced
     by [body] in the closing instant remain visible. *)
-val watch : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
+val watch :
+  ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
 
 (** {2 Concurrency}
 
@@ -198,22 +217,27 @@ val watch : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
     {!val:watch} causes every branch to be stopped together as soon as the
     watched signal fires. *)
 
-(** [parallel procs] runs each process concurrently and waits for all of them
-    to finish. *)
-val parallel : (unit -> unit) list -> unit
+(** [parallel computations] starts each computation concurrently and waits for
+    all of them to finish. *)
+val parallel : unit computation list -> unit
 
 (** High-level combinators built on top of the core primitives.
     They are exposed under [Tempo.Constructs]. *)
 module Constructs : sig
-  val after_n : int -> (unit -> unit) -> unit
-  val every_n : int -> (unit -> unit) -> unit
-  val timeout : int -> on_timeout:(unit -> unit) -> (unit -> unit) -> unit
-  val cooldown : int -> ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
-  val supervise_until :
-    ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
+  val after_n : int -> unit computation -> unit
+  val every_n : int -> unit computation -> unit
 
-  val loop : (unit -> unit) -> unit -> 'a
-  val idle : unit -> 'a
+  val timeout :
+    int -> on_timeout:unit computation -> unit computation -> unit
+
+  val cooldown :
+    int -> ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
+
+  val supervise_until :
+    ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
+
+  val loop : unit computation -> 'a computation
+  val idle : 'a computation
 end
 
 (** Runtime snapshot phase reported by {!val:execute} when [on_snapshot] is
@@ -289,6 +313,11 @@ type runtime_snapshot = private {
 
     [input] defaults to a function that never produces values, [output] defaults
     to a no-op.
+
+    [main] is invoked after the runtime has installed its effect handler. Unlike
+    {!type:computation}, it receives the two runtime-created signals. [input],
+    [output], and [on_snapshot] are host callbacks; Tempo does not schedule them
+    as reactive computations, and they must not perform Tempo effects.
 
     When [on_snapshot] is provided, the runtime emits a snapshot at key points
     of each instant (before stepping, after stepping, after signal finalization,

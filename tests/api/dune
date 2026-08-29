@@ -2,6 +2,10 @@
  (name public_surface)
  (libraries tempo))
 
+(test
+ (name computation_surface)
+ (libraries tempo))
+
 (rule
  (alias runtest)
  (deps check_private_modules.sh)

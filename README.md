@@ -69,6 +69,28 @@ Reactive behavior is built from these primitive operations:
 - `watch signal body`  
   Run `body` until `signal` is emitted; preemption is applied at the end of the current instant.
 
+A delayed reactive body has the transparent type
+`'a Tempo.computation = unit -> 'a`. Tempo uses this name at control-scope
+boundaries, notably for the branches of `parallel` and the bodies of `when_` and
+`watch`.
+No wrapper is required; an ordinary `fun () -> ...` already has this type.
+Inside such a body, immediate primitives stay in direct style:
+
+```ocaml
+parallel [
+  (fun () ->
+     pause ();
+     emit signal 42);
+  (fun () ->
+     let value = await signal in
+     Format.printf "received %d@.%!" value)
+]
+```
+
+`emit signal 42` and `await signal` therefore need no extra `()` application.
+`pause ()` keeps one because `unit` is its ordinary argument, not because it is
+a delayed computation.
+
 ## Install Tempo
 
 ### Requirements
