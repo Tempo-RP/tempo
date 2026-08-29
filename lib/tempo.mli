@@ -221,25 +221,6 @@ val watch :
     all of them to finish. *)
 val parallel : unit computation list -> unit
 
-(** High-level combinators built on top of the core primitives.
-    They are exposed under [Tempo.Constructs]. *)
-module Constructs : sig
-  val after_n : int -> unit computation -> unit
-  val every_n : int -> unit computation -> unit
-
-  val timeout :
-    int -> on_timeout:unit computation -> unit computation -> unit
-
-  val cooldown :
-    int -> ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
-
-  val supervise_until :
-    ('emit, 'agg, 'mode) signal_core -> unit computation -> unit
-
-  val loop : unit computation -> 'a computation
-  val idle : 'a computation
-end
-
 (** Runtime snapshot phase reported by {!val:execute} when [on_snapshot] is
     provided. *)
 type snapshot_phase =

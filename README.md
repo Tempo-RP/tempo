@@ -10,8 +10,6 @@ Tempo is a deterministic reactive execution model for OCaml: programs evolve by 
 - [Programming model](#programming-model)
   - [Instants and execution model](#instants-and-execution-model)
   - [Fundamental primitives](#fundamental-primitives)
-  - [Construct primitives](#construct-primitives)
-  - [Control helpers](#control-helpers)
 - [Install Tempo](#install-tempo)
   - [Requirements](#requirements)
   - [Install from opam](#install-from-opam)

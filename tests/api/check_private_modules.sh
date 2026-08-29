@@ -10,7 +10,6 @@ for module in \
   Tempo_task \
   Tempo_low_level \
   Tempo_core \
-  Tempo_constructs \
   Tempo_engine
 do
   for extension in cmi cmti
@@ -22,4 +21,16 @@ do
       exit 1
     fi
   done
+done
+
+for artifact in \
+  "$public_dir"/tempo_constructs.* \
+  "$public_dir"/tempo__Tempo_constructs.* \
+  "$public_dir"/.private/tempo__Tempo_constructs.*
+do
+  if test -e "$artifact"
+  then
+    echo "removed module artifact still installed: $artifact" >&2
+    exit 1
+  fi
 done

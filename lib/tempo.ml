@@ -36,8 +36,6 @@ let when_ = Tempo_core.when_
 let watch = Tempo_core.watch
 let parallel = Tempo_core.parallel
 
-module Constructs = Tempo_constructs
-
 type snapshot_phase = Tempo_engine.snapshot_phase
 
 type runtime_snapshot = Tempo_engine.runtime_snapshot = {

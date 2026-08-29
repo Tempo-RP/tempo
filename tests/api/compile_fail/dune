@@ -45,6 +45,16 @@
 
 (rule
  (alias runtest)
+ (deps removed_constructs.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stderr-to
+   %{null}
+   (with-accepted-exit-codes
+    2
+    (run %{ocamlc} -I . -i %{dep:removed_constructs.ml})))))
+
+(rule
+ (alias runtest)
  (deps snapshot_construction.ml tempo.cmi tempo__.cmi)
  (action
   (with-stderr-to
