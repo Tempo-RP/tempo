@@ -29,6 +29,7 @@ let fresh_event_signal (st : Tempo_types.scheduler_state) :
     Tempo_types.
       {
         s_id = fresh_signal_id st
+      ; owner = st.runtime_token
       ; tracking = Signal_untracked
       ; present = false
       ; value = None
@@ -49,6 +50,7 @@ let fresh_aggregate_signal (st : Tempo_types.scheduler_state) ~initial ~combine
     Tempo_types.
       {
         s_id = fresh_signal_id st
+      ; owner = st.runtime_token
       ; tracking = Signal_untracked
       ; present = false
       ; value = None
@@ -132,12 +134,32 @@ let register_kill_watcher
       unit
     =
  fun st s k kill_ctx ->
+  Tempo_task.ensure_signal_tracked st s;
   if Tempo_task.kill_effectively_alive k && Tempo_task.kill_context_alive kill_ctx then begin
     if s.kill_watchers = [] then
       s.kill_watchers_kill_epoch <- Tempo_task.current_kill_epoch ();
     st.metrics.kill_watchers_registered <- st.metrics.kill_watchers_registered + 1;
     s.kill_watchers <- Tempo_types.{ kill = k; kill_ctx } :: s.kill_watchers
   end
+
+let disarm_kill_watcher
+    : type emit agg mode.
+      Tempo_types.scheduler_state ->
+      (emit, agg, mode) Tempo_types.signal_core ->
+      Tempo_types.kill ->
+      unit
+    =
+ fun st s k ->
+  Tempo_task.ensure_signal_owner st s;
+  let was_alive = Tempo_task.kill_effectively_alive k in
+  k.alive := false;
+  k.cleanup <- None;
+  if
+    was_alive
+    && s.kill_watchers <> []
+    && s.kill_watchers_kill_epoch = Tempo_task.current_kill_epoch ()
+  then
+    Tempo_task.bump_kill_epoch ()
 
 let update_signal : type emit agg mode.
     Tempo_types.scheduler_state -> (emit, agg, mode) signal_core -> emit -> unit
@@ -166,12 +188,12 @@ let update_signal : type emit agg mode.
       s.awaiters_kill_epoch <- kill_epoch;
       List.iter (fun aw -> resume_awaiter aw v) resumes
   | Aggregate_signal { combine; initial } ->
-      s.present <- true;
       let acc =
         match s.value with
         | None -> combine initial v
         | Some agg -> combine agg v
       in
+      s.present <- true;
       s.value <- Some acc);
   if not was_present then Tempo_task.bump_guard_epoch ();
   Tempo_task.wake_guard_waiters st s
@@ -208,6 +230,7 @@ let emit_event_from_host : type a.
 
 let finalize_signals (st : Tempo_types.scheduler_state) =
   Tempo_task.bump_guard_epoch ();
+  let kill_epoch_before_first_pass = Tempo_task.current_kill_epoch () in
   let prune_dead_awaiters : type emit agg mode.
       (emit, agg, mode) signal_core -> unit =
    fun s ->
@@ -314,4 +337,54 @@ let finalize_signals (st : Tempo_types.scheduler_state) =
         s.tracking <- Signal_untracked
       end)
     st.signals;
-  st.signals <- List.rev !kept_rev
+  st.signals <- List.rev !kept_rev;
+  (* A present signal processed late in the first pass can kill watchers or
+     awaiters attached to a signal processed earlier. If that happened, make
+     one final linear sweep so no dead registration survives the instant merely
+     because of signal-list order. *)
+  if Tempo_task.current_kill_epoch () <> kill_epoch_before_first_pass then begin
+    let live_rev = ref [] in
+    List.iter
+      (fun ((Tempo_types.Any s) as any) ->
+        prune_dead_kill_watchers s;
+        prune_dead_awaiters s;
+        if s.awaiters <> [] || s.kill_watchers <> [] then
+          live_rev := any :: !live_rev
+        else begin
+          (match s.tracking with
+          | Signal_tracked ->
+              st.metrics.signals_untracked <- st.metrics.signals_untracked + 1
+          | Signal_untracked -> ());
+          s.tracking <- Signal_untracked
+        end)
+      st.signals;
+    st.signals <- List.rev !live_rev
+  end
+
+let close_runtime (st : Tempo_types.scheduler_state) =
+  Atomic.set st.runtime_token.active false;
+  List.iter
+    (fun (Tempo_types.Any s) ->
+      List.iter
+        (fun (w : Tempo_types.kill_watcher) ->
+          w.kill.alive := false;
+          w.kill.cleanup <- None)
+        s.kill_watchers;
+      s.tracking <- Signal_untracked;
+      s.present <- false;
+      s.value <- None;
+      s.awaiters <- [];
+      s.awaiters_kill_epoch <- -1;
+      s.guard_waiters <- [];
+      s.kill_watchers <- [];
+      s.kill_watchers_kill_epoch <- -1)
+    st.signals;
+  st.signals <- [];
+  Tempo_task.worklist_clear st.current;
+  Tempo_task.worklist_clear st.next_instant;
+  st.pending_parallel_failures <- [];
+  st.blocked <- [];
+  st.free_tasks <- [];
+  st.retired_tasks <- [];
+  st.running_task <- None;
+  Array.fill st.threads.states 0 (Array.length st.threads.states) None

@@ -14,6 +14,7 @@ val await : ('emit, 'agg, 'mode) signal_core -> 'agg
 val await_immediate : 'a signal -> 'a
 val pause : unit -> unit
 
-val when_ : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
+val when_ :
+  ('emit, 'agg, 'mode) signal_core -> (unit -> 'result) -> 'result
 val watch : ('emit, 'agg, 'mode) signal_core -> (unit -> unit) -> unit
 val parallel : (unit -> unit) list -> unit

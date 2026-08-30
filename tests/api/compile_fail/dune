@@ -1,0 +1,71 @@
+(rule
+ (package tempo)
+ (targets tempo.cmi tempo__.cmi)
+ (action
+  (progn
+   (copy %{lib:tempo:tempo.cmi} tempo.cmi)
+   (copy %{lib:tempo:tempo__.cmi} tempo__.cmi))))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps public_type.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stdout-to
+   %{null}
+   (run %{ocamlc} -I . -i %{dep:public_type.ml}))))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps signal_fields.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stderr-to
+   %{null}
+   (with-accepted-exit-codes
+    2
+    (run %{ocamlc} -I . -i %{dep:signal_fields.ml})))))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps internal_module.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stderr-to
+   %{null}
+   (with-accepted-exit-codes
+    2
+    (run %{ocamlc} -I . -i %{dep:internal_module.ml})))))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps wrapped_internal_module.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stderr-to
+   %{null}
+   (with-accepted-exit-codes
+    2
+    (run %{ocamlc} -I . -i %{dep:wrapped_internal_module.ml})))))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps removed_constructs.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stderr-to
+   %{null}
+   (with-accepted-exit-codes
+    2
+    (run %{ocamlc} -I . -i %{dep:removed_constructs.ml})))))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps snapshot_construction.ml tempo.cmi tempo__.cmi)
+ (action
+  (with-stderr-to
+   %{null}
+   (with-accepted-exit-codes
+    2
+    (run %{ocamlc} -I . -i %{dep:snapshot_construction.ml})))))

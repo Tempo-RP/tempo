@@ -21,8 +21,11 @@ open Tempo_types
 module Tempo_log = struct
   module Backend_logs = Logs
 
-  (* Runtime logging helpers: reporter setup, colorized scopes, formatting utilities,
-     and printer functions for runtime data structures. *)
+  (* Runtime logging helpers and printer functions for runtime data structures.
+     Reporter installation and log-level policy belong to the host application. *)
+
+  let source =
+    Backend_logs.Src.create ~doc:"Tempo synchronous runtime" "tempo.runtime"
 
   (* A lightweight record that captures the current instant/step when emitting logs.
      The scheduler rebuilds it at each log call so we only pass immutable data. *)
@@ -42,45 +45,10 @@ module Tempo_log = struct
   let add_opt_tag def value tags =
     match value with None -> tags | Some v -> Backend_logs.Tag.add def v tags
 
-  (* --- Color selection ---------------------------------------------------- *)
-  let ansi_reset = "\027[0m"
-
-  let use_color =
-    match Sys.getenv_opt "RML_LOG_COLOR" with
-    | Some ("0" | "false" | "no" | "off" | "FALSE" | "NO" | "OFF") -> false
-    | Some _ -> true
-    | None -> true
-
-  (* Guard tracing can be toggled dynamically via env var. *)
-  let trace_guards =
-    match Sys.getenv_opt "RML_TRACE_GUARDS" with
-    | Some ("1" | "true" | "yes" | "on" | "TRUE" | "YES" | "ON") -> true
-    | _ -> false
-
-  let color_of_scope scope =
-    if String.starts_with ~prefix:"instant" scope then "\027[35m"
-    else if String.starts_with ~prefix:"step" scope then "\027[34m"
-    else if String.starts_with ~prefix:"tasks" scope then "\027[36m"
-    else if String.starts_with ~prefix:"signals" scope then "\027[36m"
-    else if String.starts_with ~prefix:"queues" scope then "\027[36m"
-    else if String.starts_with ~prefix:"run" scope then "\027[36m"
-    else "\027[37m"
-
-  let colorize scope text =
-    if use_color then color_of_scope scope ^ text ^ ansi_reset else text
-
   (* --- Logging front-end -------------------------------------------------- *)
   let level_enabled level =
-    match Backend_logs.level () with
-    | Some current ->
-        let rank = function
-          | Logs.Error -> 0
-          | Logs.Warning -> 1
-          | Logs.Info -> 2
-          | Logs.Debug -> 3
-          | _ -> 4
-        in
-        rank current >= rank level
+    match Backend_logs.Src.level source with
+    | Some current -> level <= current
     | None -> false
 
   let should_log ?(level = Backend_logs.Debug) () = level_enabled level
@@ -94,18 +62,15 @@ module Tempo_log = struct
               |> add_opt_tag Log_tags.task_id task
               |> add_opt_tag Log_tags.signal_id signal
             in
-            let colored = colorize scope (Format.asprintf "\t%s" msg) in
-            Backend_logs.msg level (fun m -> m ~tags "%s" colored))
+            Backend_logs.msg ~src:source level (fun m ->
+                m ~header:scope ~tags "%s" msg))
       else Format.ifprintf Format.std_formatter
     in
     printer fmt
 
-  let log_banner ctx scope label =
+  let log_banner ctx scope fmt =
     log ~level:Backend_logs.Info ctx scope
-      "==================== %s ====================" label
-
-  let log_info ctx scope label =
-    log ~level:Backend_logs.Info ctx scope "%s" label
+      ("==================== " ^^ fmt ^^ " ====================")
 
   (* Compact helpers for scheduler snapshots. *)
   let log_banner_instant ctx instant =
@@ -266,11 +231,6 @@ module Tempo_log = struct
     log ctx scope "current=[%a] blocked=[%a] paused=[%a]" pp_ids current pp_ids
       blocked pp_ids paused
 
-  (* Only log guard-specific messages when tracing is enabled. *)
-  let log_guard ?task ?signal ctx fmt =
-    if trace_guards then log ?task ?signal ctx "guards" fmt
-    else Format.ifprintf Format.std_formatter fmt
-
   (* --- Duration metrics --------------------------------------------------- *)
   module Scope_metrics = struct
     type data = {
@@ -321,103 +281,6 @@ module Tempo_log = struct
             "metrics" "[%s] count=%d total=%a avg=%a max=%a" scope data.count
             pp_span data.total pp_span avg pp_span data.max)
 
-  (* --- Log-level selection / reporter init -------------------------------- *)
-  type log_level = Quiet | Error | Warning | Info | Debug
-
-  let log_level_to_logs = function
-    | Quiet -> None
-    | Error -> Some Backend_logs.Error
-    | Warning -> Some Backend_logs.Warning
-    | Info -> Some Backend_logs.Info
-    | Debug -> Some Backend_logs.Debug
-
-  let log_level_of_string s =
-    match String.lowercase_ascii s with
-    | "debug" -> Some Debug
-    | "info" -> Some Info
-    | "warn" | "warning" -> Some Warning
-    | "error" -> Some Error
-    | "quiet" | "none" | "off" -> Some Quiet
-    | _ -> None
-
-  let set_log_level level = Backend_logs.set_level (log_level_to_logs level)
-
-  let set_log_level_from_string s =
-    match log_level_of_string s with
-    | Some level -> set_log_level level
-    | None -> invalid_arg (Format.asprintf "Unknown log level '%s'" s)
-
-  let log_level_from_cli () =
-    let prefix = "--log-level" in
-    let prefix_with_equals = prefix ^ "=" in
-    let argv = Sys.argv in
-    let len = Array.length argv in
-    let rec loop idx =
-      if idx >= len then None
-      else
-        let arg = argv.(idx) in
-        if String.equal arg prefix then
-          if idx + 1 < len then Some argv.(idx + 1)
-          else (
-            Format.eprintf
-              "--log-level flag provided without a value, ignoring.@.";
-            None)
-        else if String.starts_with ~prefix:prefix_with_equals arg then
-          let value_len =
-            String.length arg - String.length prefix_with_equals
-          in
-          Some (String.sub arg (String.length prefix_with_equals) value_len)
-        else loop (idx + 1)
-    in
-    loop 1
 end
 
 include Tempo_log
-
-let stamp_tag : Mtime.span Backend_logs.Tag.def =
-  Backend_logs.Tag.def "stamp" ~doc:"Relative monotonic time stamp"
-    Mtime.Span.pp
-
-let stamp c = Backend_logs.Tag.(empty |> add stamp_tag (Mtime_clock.count c))
-
-let reporter ppf =
-  let report _src level ~over k msgf =
-    let k _ =
-      over ();
-      k ()
-    in
-    let with_stamp h _tags k ppf fmt =
-      Format.kfprintf k ppf
-        ("%a@[" ^^ fmt ^^ "@]@.")
-        Backend_logs.pp_header (level, h)
-    in
-    msgf @@ fun ?header ?tags fmt -> with_stamp header tags k ppf fmt
-  in
-  { Backend_logs.report }
-
-let init_printer () = Backend_logs.set_reporter (reporter Format.std_formatter)
-
-let init () =
-  init_printer ();
-  let level =
-    match log_level_from_cli () with
-    | Some raw -> (
-        match log_level_of_string raw with
-        | Some lvl -> lvl
-        | None ->
-            Format.eprintf
-              "Unknown value for --log-level (%s), defaulting to quiet.@." raw;
-            Quiet)
-    | None -> (
-        match Sys.getenv_opt "RML_LOG_LEVEL" with
-        | None -> Quiet
-        | Some raw -> (
-            match log_level_of_string raw with
-            | Some lvl -> lvl
-            | None ->
-                Format.eprintf
-                  "Unknown value for RML_LOG_LEVEL (%s), defaulting to quiet.@."
-                  raw;
-                Quiet))
-  in
-  set_log_level level

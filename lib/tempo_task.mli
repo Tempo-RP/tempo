@@ -24,6 +24,7 @@ val push_kill_context :
   ?watch_signal_id:int -> kill -> kill_context -> kill_context
 val kill_context_alive : kill_context -> bool
 val kill_context_has_watch_signal : kill_context -> int -> bool
+val kill_context_depth : kill_context -> int
 val kill_effectively_alive : kill -> bool
 val task_guards : task -> any_signal list
 val task_kill_ctx : task -> kill_context
@@ -46,6 +47,7 @@ val worklist_iter_lifo : (task -> unit) -> task_worklist -> unit
 val worklist_to_list : task_worklist -> task list
 val enqueue_now : scheduler_state -> task -> unit
 val enqueue_next : scheduler_state -> task -> unit
+val ensure_signal_owner : scheduler_state -> ('e, 'a, 'm) signal_core -> unit
 val ensure_signal_tracked : scheduler_state -> ('e, 'a, 'm) signal_core -> unit
 val block_on_guards : scheduler_state -> task -> unit
 val block_on_guards_with_missing :

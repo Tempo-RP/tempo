@@ -1,0 +1,126 @@
+(test
+ (name parallel_expansion)
+ (package tempo-ppx)
+ (modules parallel_expansion)
+ (libraries ppxlib tempo_ppx_expander))
+
+(test
+ (name parallel_syntax)
+ (package tempo-ppx)
+ (modules parallel_syntax)
+ (libraries tempo)
+ (preprocess
+  (pps tempo-ppx)))
+
+(test
+ (name scope_expansion)
+ (package tempo-ppx)
+ (modules scope_expansion)
+ (libraries ppxlib tempo_ppx_expander))
+
+(test
+ (name scope_syntax)
+ (package tempo-ppx)
+ (modules scope_syntax)
+ (libraries tempo)
+ (preprocess
+  (pps tempo-ppx)))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_payload.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:invalid_payload.ml}
+   "tempo.parallel expects a literal OCaml list of branch expressions")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_attributed_payload.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe}
+   %{dep:invalid_attributed_payload.ml}
+   "tempo.parallel does not accept attributes")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_when_payload.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:invalid_when_payload.ml}
+   "tempo.when expects exactly one signal expression and one body")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_scope_tuple.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:invalid_scope_tuple.ml}
+   "tempo.when expects exactly one signal expression and one body")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_watch_payload.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:invalid_watch_payload.ml}
+   "tempo.watch expects exactly one signal expression and one body")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh watch_non_unit_body.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:watch_non_unit_body.ml}
+   "but an expression was expected")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_scope_attribute.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:invalid_scope_attribute.ml}
+   "tempo.when does not accept attributes")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh invalid_when_underscore.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:invalid_when_underscore.ml}
+   "Uninterpreted extension 'tempo.when_'")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh unqualified_extension.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:unqualified_extension.ml}
+   "Uninterpreted extension 'parallel'")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_compile_failure.sh unqualified_scope_extension.ml)
+ (action
+  (run sh %{dep:check_compile_failure.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe}
+   %{dep:unqualified_scope_extension.ml} "Uninterpreted extension 'when'")))
+
+(rule
+ (alias runtest)
+ (package tempo-ppx)
+ (deps check_typedtree.sh marker_fixture.ml)
+ (action
+  (run sh %{dep:check_typedtree.sh} %{ocamlc}
+   %{exe:../../ppx/tempo_ppx_test_driver.exe} %{dep:marker_fixture.ml})))

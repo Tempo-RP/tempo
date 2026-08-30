@@ -22,7 +22,6 @@ open Tempo_thread
 open Tempo_task
 open Tempo_signal
 
-let () = Tempo_log.init ()
 let log_ctx st =
   Tempo_log.context ~instant:st.debug.instant_counter ~step:st.debug.step_counter
 
@@ -221,6 +220,18 @@ let handle_task : scheduler_state -> task -> unit =
         Tempo_log.log ?task ?signal (ctx) scope fmt
       else Format.ifprintf Format.std_formatter fmt
     in
+    let handle_owned_signal : type emit agg mode result.
+        (emit, agg, mode) signal_core ->
+        (result, unit) continuation ->
+        (unit -> unit) ->
+        unit =
+     fun s k handle ->
+      match Tempo_task.ensure_signal_owner st s with
+      | () -> handle ()
+      | exception exn ->
+          let backtrace = Printexc.get_raw_backtrace () in
+          discontinue_with_backtrace k exn backtrace
+    in
     let handle_done () =
       dlog ~task:t.t_id "step" "task done | task=#%d thread=#%d" t.t_id t.thread
     in
@@ -251,8 +262,11 @@ let handle_task : scheduler_state -> task -> unit =
      fun s v k ->
       dlog ~task:t.t_id ~signal:s.s_id "step"
         "emit | task=#%d signal=#%d" t.t_id s.s_id;
-      update_signal st s v;
-      continue k ()
+      match update_signal st s v with
+      | () -> continue k ()
+      | exception exn ->
+          let backtrace = Printexc.get_raw_backtrace () in
+          discontinue_with_backtrace k exn backtrace
     in
     let handle_await : type emit agg mode.
         (emit, agg, mode) signal_core -> (agg, unit) continuation -> unit =
@@ -415,53 +429,131 @@ let handle_task : scheduler_state -> task -> unit =
         | Some task -> task
         | None -> t
       in
-      let resume_spawn () =
-        let t' =
-          spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-            (fun () -> continue k ())
-        in
-        dlog ~task:t.t_id "step.parallel"
-          "parallel resume | parent task=#%d as task=#%d" t.t_id t'.t_id
-      in
-      let resume_stable () =
-        reset_task ~parent:current_task current_task parent_thread parent_guards
-          parent_kill_ctx
-          (fun () -> continue k ());
-        enqueue_now st current_task;
-        dlog ~task:current_task.t_id "step.parallel"
-          "parallel resume | parent task=#%d" current_task.t_id
-      in
       match procs with
       | [] -> continue k ()
       | _ ->
+          (* A parallel failure is weakly fail-fast. Branches keep running
+             until the current reaction reaches quiescence. The failure
+             barrier then kills their shared scope and discontinues [k] in the
+             same instant. Pending barriers are resolved deepest-first by
+             [stabilize_reaction], so nested failures cross one lexical
+             [parallel] boundary at a time. *)
           let parallel_thread = Tempo_thread.new_thread_id st in
-          List.iter
-            (fun proc ->
+          let parallel_kill = Tempo_low_level.new_kill () in
+          let parallel_kill_ctx =
+            push_kill_context parallel_kill parent_kill_ctx
+          in
+          let failure = ref None in
+          let failure_registered = ref false in
+          let settled = ref false in
+          let close_parallel () =
+            if !settled then false
+            else begin
+              settled := true;
+              parallel_kill.alive := false;
+              parallel_kill.cleanup <- None;
+              true
+            end
+          in
+          let failure_action () =
+            match !failure with
+            | None -> invalid_arg "parallel failure barrier without exception"
+            | Some (_, exn, backtrace) ->
+                discontinue_with_backtrace k exn backtrace
+          in
+          let schedule_spawn outcome action =
+            let t' =
+              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+                action
+            in
+            dlog ~task:t.t_id "step.parallel"
+              "parallel resume (%s) | parent task=#%d as task=#%d"
+              outcome t.t_id t'.t_id
+          in
+          let schedule_stable outcome action =
+            current_task.retained <- true;
+            reset_task ~parent:current_task current_task parent_thread
+              parent_guards parent_kill_ctx action;
+            enqueue_now st current_task;
+            dlog ~task:current_task.t_id "step.parallel"
+              "parallel resume (%s) | parent task=#%d" outcome
+              current_task.t_id
+          in
+          let resume_spawn () =
+            if close_parallel () then
+              schedule_spawn "normal" (fun () -> continue k ())
+          in
+          let resume_stable () =
+            if close_parallel () then
+              schedule_stable "normal" (fun () -> continue k ())
+          in
+          let fail_spawn () =
+            if close_parallel () && parent_alive () then
+              schedule_spawn "exception" failure_action
+          in
+          let fail_stable () =
+            if close_parallel () && parent_alive () then
+              schedule_stable "exception" failure_action
+          in
+          let stable_parent = current_task.thread = parent_thread in
+          parallel_kill.cleanup <-
+            Some (if stable_parent then fail_stable else fail_spawn);
+          let resolve_failure () =
+            if not !settled then
+              if parent_alive () then Tempo_low_level.abort_kill parallel_kill
+              else ignore (close_parallel ())
+          in
+          let record_failure index exn backtrace =
+            (match !failure with
+            | Some (recorded_index, _, _) when recorded_index <= index -> ()
+            | None | Some _ -> failure := Some (index, exn, backtrace));
+            if not !failure_registered then begin
+              failure_registered := true;
+              let depth = kill_context_depth parallel_kill_ctx in
+              st.pending_parallel_failures <-
+                (depth, resolve_failure) :: st.pending_parallel_failures
+            end
+          in
+          List.iteri
+            (fun index proc ->
+              let guarded_proc () =
+                match proc () with
+                | () -> ()
+                | exception exn ->
+                    let backtrace = Printexc.get_raw_backtrace () in
+                    record_failure index exn backtrace
+              in
               let child =
                 spawn_now ~parent:t st parallel_thread parent_guards
-                  parent_kill_ctx proc
+                  parallel_kill_ctx guarded_proc
               in
               dlog ~task:t.t_id "step.parallel"
                 "parallel spawn | parent task=#%d thread=#%d child task=#%d"
                 t.t_id parallel_thread child.t_id)
             procs;
-          if current_task.thread = parent_thread then begin
+          let join_complete resume =
+            match !failure with
+            | None -> resume ()
+            | Some _ -> ()
+          in
+          if stable_parent then begin
             current_task.retained <- true;
             add_stable_join_waiter st.threads parallel_thread
-              ~kill_ctx:parent_kill_ctx
-              ~cancel:(fun () -> dispose_task st current_task)
-              resume_stable
+              ~kill_ctx:parallel_kill_ctx
+              ~cancel:(fun () ->
+                if not !settled then dispose_task st current_task)
+              (fun () -> join_complete resume_stable)
           end else begin
             mark_suspended st.threads parent_thread;
             add_spawn_join_waiter st.threads parallel_thread
-              ~waiter_thread:parent_thread ~kill_ctx:parent_kill_ctx
-              resume_spawn
+              ~waiter_thread:parent_thread ~kill_ctx:parallel_kill_ctx
+              (fun () -> join_complete resume_spawn)
           end
     in
-    let handle_when : type emit agg mode.
+    let handle_when : type emit agg mode result.
         (emit, agg, mode) signal_core ->
-        (unit -> unit) ->
-        (unit, unit) continuation ->
+        (unit -> result) ->
+        (result, unit) continuation ->
         unit =
      fun s body k ->
       (* Safety invariant for [when_]:
@@ -470,19 +562,26 @@ let handle_task : scheduler_state -> task -> unit =
            the scheduler task trampoline;
          - always keep [s] in the scheduled task guard set, even if [s] is
            already present, so continuations after pause/await stay guarded
-           in later instants. *)
+           in later instants;
+         - resume [k] with the body's result, or discontinue it with the body's
+           exception, so the caller continues under its original guard set. *)
       let current_task =
         match st.running_task with
         | Some task -> task
         | None -> t
       in
       let guarded_run () =
-        body ();
-        if parent_alive () then begin
-          dlog ~task:current_task.t_id "step"
-            "when exit | task=#%d -> continue" current_task.t_id;
-          continue k ()
-        end
+        match body () with
+        | result ->
+            if parent_alive () then begin
+              dlog ~task:current_task.t_id "step"
+                "when exit | task=#%d -> continue" current_task.t_id;
+              continue k result
+            end
+        | exception exn ->
+            let backtrace = Printexc.get_raw_backtrace () in
+            if parent_alive () then
+              discontinue_with_backtrace k exn backtrace
       in
       if current_task.thread = parent_thread then begin
         current_task.retained <- true;
@@ -507,6 +606,16 @@ let handle_task : scheduler_state -> task -> unit =
         (unit, unit) continuation ->
         unit =
      fun s body k ->
+      (* Safety invariants for [watch]:
+         - schedule [body] through the task trampoline, including when an
+           ancestor already watches [s];
+         - resume or discontinue [k] under the caller's guards and kill
+           context, never under the body's new kill context;
+         - on normal or exceptional completion, disarm the watcher before
+           scheduling [k], so its one-shot continuation cannot be reused at
+           instant closure;
+         - preemption only schedules the normal next-instant continuation. It
+           deliberately does not discontinue killed body continuations. *)
       if kill_context_has_watch_signal parent_kill_ctx s.s_id then begin
         let current_task =
           match st.running_task with
@@ -534,15 +643,39 @@ let handle_task : scheduler_state -> task -> unit =
                 "watch elided exit (normal) | task=#%d" task.t_id
           | _ -> resume_spawn ()
         in
-        let elided_body resume =
-          body ();
-          if parent_alive () then resume ()
+        let discontinue_spawn exn backtrace =
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              (fun () -> discontinue_with_backtrace k exn backtrace)
+          in
+          dlog ~task:t.t_id "step"
+            "watch elided exit (exception) | task=#%d -> task=#%d"
+            t.t_id t'.t_id
+        in
+        let discontinue_stable exn backtrace =
+          match st.running_task with
+          | Some task when task.thread = parent_thread ->
+              task.retained <- true;
+              reset_task ~parent:task task parent_thread parent_guards
+                parent_kill_ctx
+                (fun () -> discontinue_with_backtrace k exn backtrace);
+              enqueue_now st task;
+              dlog ~task:task.t_id "step"
+                "watch elided exit (exception) | task=#%d" task.t_id
+          | _ -> discontinue_spawn exn backtrace
+        in
+        let elided_body resume discontinue =
+          match body () with
+          | () -> if parent_alive () then resume ()
+          | exception exn ->
+              let backtrace = Printexc.get_raw_backtrace () in
+              if parent_alive () then discontinue exn backtrace
         in
         if current_task.thread = parent_thread then begin
           current_task.retained <- true;
           reset_task ~parent:current_task current_task parent_thread parent_guards
             parent_kill_ctx
-            (fun () -> elided_body resume_stable);
+            (fun () -> elided_body resume_stable discontinue_stable);
           enqueue_now st current_task;
           dlog ~task:current_task.t_id ~signal:s.s_id "step"
             "watch elided (ancestor already watches signal) | task=#%d signal=#%d"
@@ -550,7 +683,7 @@ let handle_task : scheduler_state -> task -> unit =
         end else
           let t' =
             spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-              (fun () -> elided_body resume_spawn)
+              (fun () -> elided_body resume_spawn discontinue_spawn)
           in
           dlog ~task:t.t_id ~signal:s.s_id "step"
             "watch elided (ancestor already watches signal) | task=#%d signal=#%d -> task=#%d"
@@ -568,8 +701,7 @@ let handle_task : scheduler_state -> task -> unit =
           if !resumed then false
           else begin
             resumed := true;
-            kk.alive := false;
-            kk.cleanup <- None;
+            disarm_kill_watcher st s kk;
             true
           end
         in
@@ -583,35 +715,51 @@ let handle_task : scheduler_state -> task -> unit =
               "watch exit (killed) | task=#%d -> task=#%d" t.t_id t'.t_id
           end
         in
+        let schedule_now_spawn outcome run =
+          let t' =
+            spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
+              run
+          in
+          dlog ~task:t.t_id "step"
+            "watch exit (%s) | task=#%d -> task=#%d" outcome t.t_id t'.t_id
+        in
+        let schedule_now_stable outcome run =
+          match st.running_task with
+          | Some task when task.thread = parent_thread ->
+              task.retained <- true;
+              reset_task ~parent:task task parent_thread parent_guards
+                parent_kill_ctx run;
+              enqueue_now st task;
+              dlog ~task:task.t_id "step"
+                "watch exit (%s) | task=#%d" outcome task.t_id
+          | _ -> schedule_now_spawn outcome run
+        in
         let resume_now () =
-          if close_watch () then begin
-            let t' =
-              spawn_now ~parent:t st parent_thread parent_guards parent_kill_ctx
-                (fun () -> continue k ())
-            in
-            dlog ~task:t.t_id "step"
-              "watch exit (normal) | task=#%d -> task=#%d" t.t_id t'.t_id
-          end
+          if close_watch () then
+            schedule_now_spawn "normal" (fun () -> continue k ())
         in
         let resume_now_stable () =
-          if close_watch () then begin
-            match st.running_task with
-            | Some task when task.thread = parent_thread ->
-                task.retained <- true;
-                reset_task ~parent:task task parent_thread parent_guards
-                  parent_kill_ctx
-                  (fun () -> continue k ());
-                enqueue_now st task;
-                dlog ~task:task.t_id "step"
-                  "watch exit (normal) | task=#%d" task.t_id
-            | _ -> resume_now ()
-          end
+          if close_watch () then
+            schedule_now_stable "normal" (fun () -> continue k ())
+        in
+        let discontinue_now exn backtrace =
+          if close_watch () then
+            schedule_now_spawn "exception" (fun () ->
+                discontinue_with_backtrace k exn backtrace)
+        in
+        let discontinue_now_stable exn backtrace =
+          if close_watch () then
+            schedule_now_stable "exception" (fun () ->
+                discontinue_with_backtrace k exn backtrace)
         in
         kk.cleanup <- Some resume_next;
         register_kill_watcher st s kk parent_kill_ctx;
-        let guarded_body resume =
-          body ();
-          resume ()
+        let guarded_body resume discontinue =
+          match body () with
+          | () -> resume ()
+          | exception exn ->
+              let backtrace = Printexc.get_raw_backtrace () in
+              discontinue exn backtrace
         in
         let body_kill_ctx =
           push_kill_context ~watch_signal_id:s.s_id kk parent_kill_ctx
@@ -620,14 +768,14 @@ let handle_task : scheduler_state -> task -> unit =
           current_task.retained <- true;
           reset_task ~parent:current_task current_task parent_thread parent_guards
             body_kill_ctx
-            (fun () -> guarded_body resume_now_stable);
+            (fun () -> guarded_body resume_now_stable discontinue_now_stable);
           enqueue_now st current_task;
           dlog ~task:current_task.t_id ~signal:s.s_id "step"
             "watch enter | task=#%d signal=#%d" current_task.t_id s.s_id
         end else
           let t' =
             spawn_now ~parent:t st parent_thread parent_guards body_kill_ctx
-              (fun () -> guarded_body resume_now)
+              (fun () -> guarded_body resume_now discontinue_now)
           in
           dlog ~task:t.t_id ~signal:s.s_id "step"
             "watch enter | task=#%d signal=#%d -> task=#%d"
@@ -641,16 +789,21 @@ let handle_task : scheduler_state -> task -> unit =
       | effect (New_signal ()), k -> handle_new_signal k
       | effect (New_signal_agg (initial, combine)), k ->
           handle_new_signal_agg initial combine k
-      | effect (Emit (s, v)), k -> handle_emit s v k
+      | effect (Emit (s, v)), k ->
+          handle_owned_signal s k (fun () -> handle_emit s v k)
       (* Suspension / resumption on signals *)
-      | effect (Await s), k -> handle_await s k
-      | effect (Await_immediate s), k -> handle_await_immediate s k
+      | effect (Await s), k ->
+          handle_owned_signal s k (fun () -> handle_await s k)
+      | effect (Await_immediate s), k ->
+          handle_owned_signal s k (fun () -> handle_await_immediate s k)
       (* Scheduling and thread control *)
       | effect Pause, k -> handle_pause k
       | effect (Parallel procs), k -> handle_parallel procs k
       (* Guarded and preemptive control operators *)
-      | effect (When (s, body)), k -> handle_when s body k
-      | effect (Watch (s, body)), k -> handle_watch s body k
+      | effect (When (s, body)), k ->
+          handle_owned_signal s k (fun () -> handle_when s body k)
+      | effect (Watch (s, body)), k ->
+          handle_owned_signal s k (fun () -> handle_watch s body k)
     in
     let cleanup () =
       if t.generation = generation && not t.retained then dispose_task st t
@@ -724,6 +877,22 @@ let rec step : scheduler_state -> unit =
           record_step_metrics ();
           continue ()
 
+let rec stabilize_reaction (st : scheduler_state) =
+  step st;
+  match st.pending_parallel_failures with
+  | [] -> ()
+  | pending ->
+      let deepest =
+        List.fold_left (fun acc (depth, _) -> max acc depth) min_int pending
+      in
+      let current_wave, later =
+        List.partition (fun (depth, _) -> depth = deepest) pending
+      in
+      st.pending_parallel_failures <- later;
+      List.iter (fun (_, resolve) -> resolve ()) (List.rev current_wave);
+      prune_dead_join_waiters st.threads (current_kill_epoch ());
+      stabilize_reaction st
+
 let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
     (unit -> unit) -> scheduler_state -> int option -> unit =
   fun on_snapshot before_step after_step st remaining ->
@@ -746,7 +915,7 @@ let rec run_instant : (runtime_snapshot -> unit) option -> (unit -> unit) ->
         st.retired_tasks <- [];
         emit_snapshot on_snapshot st `Before_step;
         before_step ();
-        step st;
+        stabilize_reaction st;
         after_step ();
         emit_snapshot on_snapshot st `After_step;
         (match counter with
@@ -814,8 +983,10 @@ let create_scheduler_state () =
       ; kill_watchers_pruned = 0
       }
   in
-  { current         = create_worklist ()
-    ;next_instant    = create_worklist ()
+  { runtime_token   = { active = Atomic.make true }
+    ;current        = create_worklist ()
+    ;next_instant   = create_worklist ()
+    ;pending_parallel_failures = []
     ;blocked         = []
     ;free_tasks      = []
     ;retired_tasks   = []
@@ -834,22 +1005,27 @@ let create_scheduler_state () =
 let execute ?instants ?(input = fun () -> None) ?(output = fun _ -> ())
     ?on_snapshot initial =
   let st = create_scheduler_state () in
-  let input_signal = fresh_event_signal st in
-  let output_signal = fresh_event_signal st in
-  let before_step () =
-    match input () with
-    | None -> ()
-    | Some payload -> emit_event_from_host st input_signal payload
-  in
-  let after_step () =
-      match output_signal.value with
-      | Some value -> output value
-      | None -> ()
-  in
-  let thread = Tempo_thread.new_thread_id st in
-  ignore
-    (spawn_now st thread [] empty_kill_context
-       (fun () -> initial input_signal output_signal));
-  Tempo_log.log_banner (log_ctx st) "execute" "runtime start | schedule initial task=#%d";
-  run_instant on_snapshot before_step after_step st instants;
-  Tempo_log.log_duration_summary ()
+  Fun.protect
+    ~finally:(fun () -> Tempo_signal.close_runtime st)
+    (fun () ->
+      let input_signal = fresh_event_signal st in
+      let output_signal = fresh_event_signal st in
+      let before_step () =
+        match input () with
+        | None -> ()
+        | Some payload -> emit_event_from_host st input_signal payload
+      in
+      let after_step () =
+        match output_signal.value with
+        | Some value -> output value
+        | None -> ()
+      in
+      let thread = Tempo_thread.new_thread_id st in
+      let initial_task =
+        spawn_now st thread [] empty_kill_context
+          (fun () -> initial input_signal output_signal)
+      in
+      Tempo_log.log_banner (log_ctx st) "execute"
+        "runtime start | schedule initial task=#%d" initial_task.t_id;
+      run_instant on_snapshot before_step after_step st instants;
+      Tempo_log.log_duration_summary ())

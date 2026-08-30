@@ -194,9 +194,21 @@ let enqueue_next st t =
   st.metrics.tasks_enqueued_next <- st.metrics.tasks_enqueued_next + 1;
   worklist_add st.next_instant t
 
+let ensure_signal_owner : type e a m.
+    scheduler_state -> (e, a, m) signal_core -> unit =
+ fun st s ->
+  if s.owner != st.runtime_token then
+    if Atomic.get s.owner.active then
+      invalid_arg "Tempo: signal belongs to another execution"
+    else
+      invalid_arg "Tempo: signal belongs to a completed execution"
+  else if not (Atomic.get st.runtime_token.active) then
+    invalid_arg "Tempo: signal belongs to a completed execution"
+
 let ensure_signal_tracked : type e a m.
     scheduler_state -> (e, a, m) signal_core -> unit =
  fun st s ->
+  ensure_signal_owner st s;
   match s.tracking with
   | Signal_tracked -> ()
   | Signal_untracked ->

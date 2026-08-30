@@ -16,9 +16,19 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *---------------------------------------------------------------------------*)
 
-type ('emit, 'agg, 'mode) signal_core = ('emit, 'agg, 'mode) Tempo_core.signal_core
-type 'a signal = 'a Tempo_core.signal
-type ('emit, 'agg) agg_signal = ('emit, 'agg) Tempo_core.agg_signal
+type 'a computation = unit -> 'a
+type event = Tempo_types.event
+type aggregate = Tempo_types.aggregate
+
+type ('emit, 'observe, 'kind) signal_core =
+  ('emit, 'observe, 'kind) Tempo_core.signal_core
+
+type 'a signal = ('a, 'a, event) signal_core
+type ('emit, 'observe) agg_signal = ('emit, 'observe, aggregate) signal_core
+
+module Logging = struct
+  let source = Tempo_log.source
+end
 
 let new_signal = Tempo_core.new_signal
 let new_signal_agg = Tempo_core.new_signal_agg
@@ -30,9 +40,56 @@ let when_ = Tempo_core.when_
 let watch = Tempo_core.watch
 let parallel = Tempo_core.parallel
 
-module Constructs = Tempo_constructs
-
 type snapshot_phase = Tempo_engine.snapshot_phase
-type runtime_snapshot = Tempo_engine.runtime_snapshot
+
+type runtime_snapshot = Tempo_engine.runtime_snapshot = {
+    phase : snapshot_phase
+  ; instant : int
+  ; step : int
+  ; current_q : int
+  ; blocked_q : int
+  ; next_q : int
+  ; tracked_signals : int
+  ; awaiters : int
+  ; guard_waiters : int
+  ; kill_watchers : int
+  ; live_tasks : int
+  ; kill_context_refs : int
+  ; kill_context_nodes : int
+  ; kill_context_max_depth : int
+  ; active_thread_slots : int
+  ; total_active_threads : int
+  ; total_suspended_threads : int
+  ; task_counter : int
+  ; thread_counter : int
+  ; signal_counter : int
+  ; free_task_count : int
+  ; gc_minor_words : float
+  ; gc_promoted_words : float
+  ; gc_major_words : float
+  ; gc_minor_collections : int
+  ; gc_major_collections : int
+  ; gc_heap_words : int
+  ; gc_live_words : int
+  ; gc_free_words : int
+  ; gc_top_heap_words : int
+  ; gc_stack_size : int
+  ; cum_tasks_created : int
+  ; cum_tasks_disposed : int
+  ; cum_tasks_enqueued_now : int
+  ; cum_tasks_enqueued_next : int
+  ; cum_tasks_blocked : int
+  ; cum_signals_created : int
+  ; cum_signals_tracked : int
+  ; cum_signals_untracked : int
+  ; cum_awaiters_registered : int
+  ; cum_awaiters_resumed : int
+  ; cum_awaiters_pruned : int
+  ; cum_guard_waiter_registrations : int
+  ; cum_guard_waiter_wakeups : int
+  ; cum_kill_watchers_registered : int
+  ; cum_kill_watchers_fired : int
+  ; cum_kill_watchers_pruned : int
+}
 
 let execute = Tempo_engine.execute

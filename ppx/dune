@@ -1,0 +1,20 @@
+(library
+ (name tempo_ppx_expander)
+ (package tempo-ppx)
+ (modules tempo_ppx_expander)
+ (libraries ppxlib))
+
+(library
+ (name tempo_ppx)
+ (public_name tempo-ppx)
+ (kind ppx_rewriter)
+ (modules tempo_ppx)
+ (libraries ppxlib tempo_ppx_expander)
+ (ppx_runtime_libraries tempo))
+
+(executable
+ (name tempo_ppx_test_driver)
+ (public_name -)
+ (package tempo-ppx)
+ (modules tempo_ppx_test_driver)
+ (libraries ppxlib tempo_ppx_expander))

@@ -1,3 +1,49 @@
+## [0.3.0] - 2026-08-30
+
+### Added
+- Added the optional `tempo-ppx` package and the
+  `[%tempo.parallel [branch; ...]]`, `[%tempo.when guard body]`, and
+  `[%tempo.watch signal body]` syntaxes for delayed control computations.
+- Added the transparent `'a computation = unit -> 'a` name for delayed Tempo
+  control bodies.
+- Added public API compile checks and precise behavioral tests for guarded,
+  preemptive, and parallel control scopes.
+
+### Changed
+- Made signal and runtime representations private implementation details.
+- Specified the `execute` lifecycle: run-to-quiescence termination, the maximum
+  `instants` bound, host callback ordering and failures, and the unsupported
+  status of concurrent invocations on distinct OCaml Domains in Tempo 0.3.
+- Declared `snapshot_phase`, `runtime_snapshot`, and `on_snapshot` experimental
+  diagnostics APIs.
+- Generalized `when_` so a normally completed guarded computation returns its
+  result.
+- Defined `watch` as weak preemption and documented its timing and cleanup
+  limitations.
+- Made exceptions escaping `parallel` branches weakly fail-fast, deterministic
+  by branch index, and catchable at the lexical call site in the same instant.
+- Made signal emission failures observable in direct style at the `emit` call
+  site.
+
+### Fixed
+- Replaced placeholder package and contribution links with the canonical
+  Tempo-RP repository and API documentation URLs.
+- Corrected the documented timing of `await_immediate` when its signal becomes
+  present after the call.
+- Bound every signal to its creating `execute` invocation, reject foreign or
+  expired signals at the direct-style call site, and detach pending runtime
+  registrations whenever `execute` returns.
+- Prune completed `watch` scopes at instant finalization so dead kill watchers
+  do not accumulate on long-lived absent signals.
+- Stop replacing the host application's global `Logs` reporter and reporting
+  levels when Tempo is loaded. Runtime diagnostics now use the dedicated
+  `Tempo.Logging.source` and remain under application control.
+
+### Removed
+- Removed the unstable public `Constructs` compatibility module.
+- Removed implicit parsing of the generic `--log-level` option and the legacy
+  `RML_*` logging environment variables from the runtime library.
+
 ## [0.2.1] - 2026-08-06
 
 ### Added
@@ -43,5 +89,5 @@
 ### Dependencies
 - Updated `raylib` to `2.2.2`.
 
-## [v0.2.0]
+## [0.2.0]
 - Baseline release.

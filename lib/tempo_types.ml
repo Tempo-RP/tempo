@@ -31,6 +31,8 @@ type thread = int
 type event
 type aggregate
 
+type runtime_token = { active : bool Atomic.t }
+
 type 'agg resume_plan =
   | Resume_stable_now of 'agg stable_resume
   | Resume_stable_next of 'agg stable_resume
@@ -69,6 +71,7 @@ and signal_tracking =
 
 and ('emit, 'agg, 'mode) signal_core = {
     s_id : int
+  ; owner : runtime_token
   ; mutable tracking : signal_tracking
   ; mutable present : bool
   ; mutable value : 'agg option
@@ -166,8 +169,10 @@ type runtime_metrics = {
 }
 
 type scheduler_state = {
-    current : task_worklist
+    runtime_token : runtime_token
+  ; current : task_worklist
   ; next_instant : task_worklist
+  ; mutable pending_parallel_failures : (int * (unit -> unit)) list
   ; mutable blocked : task list
   ; mutable free_tasks : task list
   ; mutable retired_tasks : task list
@@ -190,8 +195,8 @@ type _ Effect.t +=
   | Pause : unit Effect.t
   | Parallel : (unit -> unit) list -> unit Effect.t
   | When :
-      ('emit, 'agg, 'mode) signal_core * (unit -> unit)
-      -> unit Effect.t
+      ('emit, 'agg, 'mode) signal_core * (unit -> 'result)
+      -> 'result Effect.t
   | Watch :
       ('emit, 'agg, 'mode) signal_core * (unit -> unit)
       -> unit Effect.t

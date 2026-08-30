@@ -1,0 +1,4 @@
+empty=0 singleton=0
+selected=0 caught=0 sibling_prefix=true sibling_suffix=false
+delayed=1 caught=1 descendant_ticks=2 failing_finally=true
+awaited=1 caught=1 blocked_suffix=false awaiters=0 kill_watchers=0 live_tasks=0
