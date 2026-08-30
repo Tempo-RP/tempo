@@ -8,6 +8,33 @@
  (package tempo)
  (libraries tempo))
 
+(test
+ (name logging_source)
+ (package tempo)
+ (libraries logs tempo))
+
+(executable
+ (name logging_load_isolation)
+ (modules logging_load_isolation)
+ (libraries dynlink logs mtime mtime.clock)
+ (link_flags (:standard -linkall)))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps (:tempo_plugin %{lib:tempo:tempo.cmxs}))
+ (action
+  (run %{exe:logging_load_isolation.exe} %{tempo_plugin}
+   --log-level=application-owned)))
+
+(rule
+ (alias runtest)
+ (package tempo)
+ (deps (:tempo_plugin %{lib:tempo:tempo.cmxs}))
+ (action
+  (setenv RML_LOG_LEVEL application-owned
+   (run %{exe:logging_load_isolation.exe} %{tempo_plugin}))))
+
 (rule
  (alias runtest)
  (package tempo)

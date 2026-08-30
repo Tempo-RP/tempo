@@ -22,7 +22,6 @@ open Tempo_thread
 open Tempo_task
 open Tempo_signal
 
-let () = Tempo_log.init ()
 let log_ctx st =
   Tempo_log.context ~instant:st.debug.instant_counter ~step:st.debug.step_counter
 
@@ -1022,10 +1021,11 @@ let execute ?instants ?(input = fun () -> None) ?(output = fun _ -> ())
         | None -> ()
       in
       let thread = Tempo_thread.new_thread_id st in
-      ignore
-        (spawn_now st thread [] empty_kill_context
-           (fun () -> initial input_signal output_signal));
+      let initial_task =
+        spawn_now st thread [] empty_kill_context
+          (fun () -> initial input_signal output_signal)
+      in
       Tempo_log.log_banner (log_ctx st) "execute"
-        "runtime start | schedule initial task=#%d";
+        "runtime start | schedule initial task=#%d" initial_task.t_id;
       run_instant on_snapshot before_step after_step st instants;
       Tempo_log.log_duration_summary ())

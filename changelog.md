@@ -26,9 +26,14 @@
   registrations whenever `execute` returns.
 - Prune completed `watch` scopes at instant finalization so dead kill watchers
   do not accumulate on long-lived absent signals.
+- Stop replacing the host application's global `Logs` reporter and reporting
+  levels when Tempo is loaded. Runtime diagnostics now use the dedicated
+  `Tempo.Logging.source` and remain under application control.
 
 ### Removed
 - Removed the unstable public `Constructs` compatibility module.
+- Removed implicit parsing of the generic `--log-level` option and the legacy
+  `RML_*` logging environment variables from the runtime library.
 
 ## [0.2.1] - 2026-08-06
 

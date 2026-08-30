@@ -26,6 +26,10 @@ type ('emit, 'observe, 'kind) signal_core =
 type 'a signal = ('a, 'a, event) signal_core
 type ('emit, 'observe) agg_signal = ('emit, 'observe, aggregate) signal_core
 
+module Logging = struct
+  let source = Tempo_log.source
+end
+
 let new_signal = Tempo_core.new_signal
 let new_signal_agg = Tempo_core.new_signal_agg
 let emit = Tempo_core.emit

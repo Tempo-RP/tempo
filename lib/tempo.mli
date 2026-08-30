@@ -34,6 +34,17 @@
     
     *)
 
+(** {1 Runtime logging} *)
+
+module Logging : sig
+  val source : Logs.src
+  (** The dedicated [Logs] source for Tempo runtime diagnostics, named
+      ["tempo.runtime"]. Tempo never installs a reporter and never changes the
+      global or source-specific reporting levels. The host application may
+      enable this source with [Logs.Src.set_level source level] after installing
+      the reporter of its choice. *)
+end
+
 (** {1 Computations} *)
 
 (** A name for a delayed OCaml computation passed to a Tempo control operator.

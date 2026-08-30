@@ -15,7 +15,7 @@ Tempo is a deterministic reactive execution model for OCaml: programs evolve by 
   - [Install from opam](#install-from-opam)
 - [Quick start](#quick-start)
   - [Create and run a minimal application](#create-and-run-a-minimal-application)
-  - [Logging and runtime flags](#logging-and-runtime-flags)
+  - [Runtime logging](#runtime-logging)
 - [Contributing](#contributing)
 - [Run demos](#run-demos)
   - [Simple demos](#simple-demos)
@@ -257,6 +257,26 @@ dune build ./my_app.exe
 # run it
 dune exec ./my_app.exe
 ```
+
+### Runtime logging
+
+Tempo sends its runtime diagnostics through the dedicated
+`Tempo.Logging.source`, named `tempo.runtime`. Loading Tempo does not install a
+reporter, change any global logging level, inspect command-line arguments, or
+interpret logging environment variables. The host application owns those
+policies.
+
+For example, an application can enable Tempo diagnostics without changing the
+levels of other libraries (and should list `logs` alongside `tempo` in its Dune
+`libraries` field):
+
+```ocaml
+Logs.set_reporter (Logs.format_reporter ());
+Logs.Src.set_level Tempo.Logging.source (Some Logs.Debug)
+```
+
+With the default `Logs` warning level, Tempo stays silent because its runtime
+diagnostics use the `Info` and `Debug` levels.
 
 ## Contributing
 
