@@ -1,4 +1,4 @@
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-08-30
 
 ### Added
 - Added the optional `tempo-ppx` package and the
