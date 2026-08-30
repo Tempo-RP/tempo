@@ -7,9 +7,9 @@ description:
 maintainer: ["Frederic Dabrowski <frederic.dabrowski@univ-orleans.fr>"]
 authors: ["Frederic Dabrowski <frederic.dabrowski@univ-orleans.fr>"]
 license: "GPL-3.0-or-later"
-homepage: "https://github.com/DabrowskiFr/tempo"
-doc: "https://url/to/documentation"
-bug-reports: "https://github.com/DabrowskiFr/tempo/issues"
+homepage: "https://github.com/Tempo-RP/tempo"
+doc: "https://tempo-rp.github.io/tempo/"
+bug-reports: "https://github.com/Tempo-RP/tempo/issues"
 depends: [
   "dune" {>= "3.19"}
   "ocaml" {>= "5.4.1"}
@@ -31,5 +31,5 @@ build: [
     "@doc" {with-doc}
   ]
 ]
-dev-repo: "git+https://github.com/DabrowskiFr/tempo.git"
+dev-repo: "git+https://github.com/Tempo-RP/tempo.git"
 x-maintenance-intent: ["(latest)"]

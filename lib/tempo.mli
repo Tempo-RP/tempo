@@ -16,10 +16,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *---------------------------------------------------------------------------*)
 
-(** This library revisits the ReactiveML programming model using
-    {b algebraic effects} (as provided by OCaml 5.3), instead of the
-    continuation-passing and compilation techniques used in the
-    original ReactiveML implementation.
+(** This library revisits the ReactiveML programming model using {b OCaml 5
+    algebraic effects}, instead of the continuation-passing and compilation
+    techniques used in the original ReactiveML implementation. Tempo 0.3
+    requires OCaml 5.4.1 or newer.
     
     Programs are executed according to a synchronous semantics: 
     computation progresses in a sequence of logical instants,
@@ -281,8 +281,19 @@ val watch :
     in those continuations are not guaranteed to run. *)
 val parallel : unit computation list -> unit
 
-(** Runtime snapshot phase reported by {!val:execute} when [on_snapshot] is
-    provided. *)
+(** Experimental phases reported by [on_snapshot]. [`Before_step] precedes the
+    [input] callback. [`After_step] follows reaction quiescence and the optional
+    [output] callback. [`After_finalize] follows signal finalization and the
+    scheduling of blocked tasks. [`After_rollover] follows rollover processing
+    when the next-instant queue was non-empty. It does not guarantee that live
+    work remains or that the possible next instant will be opened. At that
+    phase, {!type:runtime_snapshot}'s [instant] field already denotes the
+    possible next instant.
+
+    Not every phase occurs for every instant. A zero-instant execution emits no
+    snapshot, [`After_rollover] is omitted when the next-instant queue is empty,
+    and an exception can truncate the sequence. The phase set and callback
+    schedule may change in a later 0.x release. *)
 type snapshot_phase =
   [ `Before_step
   | `After_step
@@ -292,7 +303,12 @@ type snapshot_phase =
 
 (** Immutable snapshot of scheduler and GC counters for one instant phase.
     Fields are readable by clients, but only the runtime can construct a
-    snapshot. *)
+    snapshot.
+
+    This is an experimental diagnostics interface in Tempo 0.3. The record
+    shape, individual counters, and their exact meanings may change between
+    later 0.x releases. It must not be persisted or used to define the
+    functional behavior of a Tempo program. *)
 type runtime_snapshot = private {
     phase : snapshot_phase
   ; instant : int
@@ -343,37 +359,69 @@ type runtime_snapshot = private {
   ; cum_kill_watchers_pruned : int
 }
 
-(** [execute ?instants ?input ?output ?on_snapshot main] starts the synchronous
-    execution of a
-    top-level process. The callback [main input_signal output_signal] receives:
+(** [execute ?instants ?input ?output ?on_snapshot main] runs [main] in a fresh
+    synchronous runtime.
 
-    - [input_signal] : a regular event signal that the runtime marks present at
-      the beginning of an instant whenever [input ()] returns [Some payload].
-    - [output_signal] : a regular event signal that is flushed via [output]
-      once per instant if user code emits it.
+    {b Instants and termination.} [main input_signal output_signal] runs as a
+    scheduled Tempo task in the first logical instant that is opened. If
+    [instants] is omitted, [execute] keeps opening instants while scheduler work
+    remains queued for a later instant. On the normal path, every opened instant
+    is driven to reaction quiescence and closed before the next one is opened.
 
-    [input] defaults to a function that never produces values, [output] defaults
-    to a no-op.
+    [~instants:n] sets an upper bound; it does not request exactly [n] instants.
+    Execution may stop earlier when no later work is queued, or when an
+    exception escapes. If [n <= 0], no instant is opened, and [main], [input],
+    [output], and [on_snapshot] are not called. The bound is checked only between
+    instants: it cannot interrupt a computation that fails to reach quiescence
+    within the current instant. Work still suspended or scheduled beyond the
+    bound is abandoned when the runtime closes.
 
-    [main] is invoked after the runtime has installed its effect handler. Unlike
-    {!type:computation}, it receives the two runtime-created signals. [input],
-    [output], and [on_snapshot] are host callbacks; Tempo does not schedule them
-    as reactive computations, and they must not perform Tempo effects.
+    {b Host input and output.} [input_signal] and [output_signal] are ordinary
+    event signals. On the normal path, [input] is called once for every instant
+    that is actually opened, after the optional [`Before_step] snapshot callback
+    and before reactive stepping. [Some value] makes [input_signal] present
+    before scheduled tasks run; [None] performs no host emission. [input]
+    defaults to a callback that always returns [None].
 
-    An exception that escapes the top-level process terminates [execute]
-    immediately. In particular, if it escapes during reaction stepping, the
-    [output] callback and the remaining snapshot/finalization phases of that
-    instant are not run. Catch the exception inside the Tempo process when the
-    current instant must still be flushed to the host.
+    The presence of an [input] callback does not by itself keep [execute]
+    running, and the bound does not force input polling. In particular, a
+    continuation suspended only by {!val:await} or {!val:await_immediate} on an
+    absent signal does not schedule another instant. A host-driven service must
+    keep a task scheduled for later instants, for example with a {!val:pause}
+    loop or a persistent {!val:when_} guard.
+
+    After the reaction reaches quiescence, [output] is called once with the
+    value of [output_signal] if that signal is present; otherwise it is not
+    called. [output] defaults to a no-op. Output runs before signal finalization,
+    including the end-of-instant preemption performed by {!val:watch}.
+
+    {b Callbacks and failures.} [input], [output], and [on_snapshot] are
+    synchronous host callbacks. They run on the Domain calling [execute],
+    outside Tempo task scheduling, and must not perform Tempo effects. If a
+    callback blocks, [execute] blocks. If it raises, its exception escapes
+    [execute] and no later phase of that instant is run; ordinary OCaml side
+    effects already performed are not rolled back.
+
+    An exception that escapes the top-level Tempo process likewise terminates
+    [execute]. If it escapes during reactive stepping, [output] and the remaining
+    snapshot and finalization phases of that instant are skipped. Catch it
+    inside the Tempo process when the current instant must still be flushed to
+    the host.
 
     When [execute] returns, normally or exceptionally, all suspended
     continuations owned by that invocation are abandoned and its signals
     expire. Shutdown does not unwind those suspended continuations and does not
     guarantee execution of cleanup handlers stored in them.
 
-    When [on_snapshot] is provided, the runtime emits a snapshot at key points
-    of each instant (before stepping, after stepping, after signal finalization,
-    and after rollover), enabling fine-grained memory/scheduler diagnostics. *)
+    When [on_snapshot] is provided, the runtime emits an experimental
+    {!type:runtime_snapshot} at the phases described by
+    {!type:snapshot_phase}.
+
+    {b Domains.} Sequential and nested invocations are supported, subject to
+    signal ownership. Concurrent invocations of [execute] on multiple OCaml
+    Domains are outside the Tempo 0.3 contract: no correctness or determinism
+    guarantee is provided, and applications must serialize them. This does not
+    restrict the logical concurrency provided by {!val:parallel}. *)
 val execute :
      ?instants:int
   -> ?input:(unit -> 'input option)

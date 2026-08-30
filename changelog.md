@@ -11,6 +11,11 @@
 
 ### Changed
 - Made signal and runtime representations private implementation details.
+- Specified the `execute` lifecycle: run-to-quiescence termination, the maximum
+  `instants` bound, host callback ordering and failures, and the unsupported
+  status of concurrent invocations on distinct OCaml Domains in Tempo 0.3.
+- Declared `snapshot_phase`, `runtime_snapshot`, and `on_snapshot` experimental
+  diagnostics APIs.
 - Generalized `when_` so a normally completed guarded computation returns its
   result.
 - Defined `watch` as weak preemption and documented its timing and cleanup
@@ -21,6 +26,10 @@
   site.
 
 ### Fixed
+- Replaced placeholder package and contribution links with the canonical
+  Tempo-RP repository and API documentation URLs.
+- Corrected the documented timing of `await_immediate` when its signal becomes
+  present after the call.
 - Bound every signal to its creating `execute` invocation, reject foreign or
   expired signals at the direct-style call site, and detach pending runtime
   registrations whenever `execute` returns.
@@ -80,5 +89,5 @@
 ### Dependencies
 - Updated `raylib` to `2.2.2`.
 
-## [v0.2.0]
+## [0.2.0]
 - Baseline release.

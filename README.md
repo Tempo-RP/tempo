@@ -8,20 +8,16 @@ Tempo is a deterministic reactive execution model for OCaml: programs evolve by 
 
 - [Overview](#overview)
 - [Programming model](#programming-model)
-  - [Instants and execution model](#instants-and-execution-model)
+  - [Instants and execution lifecycle](#instants-and-execution-lifecycle)
   - [Fundamental primitives](#fundamental-primitives)
+  - [Optional PPX syntax](#optional-ppx-syntax)
 - [Install Tempo](#install-tempo)
   - [Requirements](#requirements)
-  - [Install from opam](#install-from-opam)
+  - [Install from source](#install-from-source)
 - [Quick start](#quick-start)
   - [Create and run a minimal application](#create-and-run-a-minimal-application)
-  - [Runtime logging](#runtime-logging)
+  - [Runtime logging and diagnostics](#runtime-logging-and-diagnostics)
 - [Contributing](#contributing)
-- [Run demos](#run-demos)
-  - [Simple demos](#simple-demos)
-  - [Advanced applications](#advanced-applications)
-- [Application screenshots](#application-screenshots)
-- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -34,13 +30,36 @@ Tempo is a deterministic reactive execution model for OCaml: programs evolve by 
 
 ## Programming model
 
-### Instants and execution model
+### Instants and execution lifecycle
 
 A program is evaluated over a sequence of discrete instants. At each instant:
 
 - A signal is either **present** (emitted by environment or program) or **absent**.
 - The absence of a signal is only observed in the following instant, which preserves determinism.
 - Weak preemption is supported through constructs such as `watch`, allowing controlled interruption without breaking synchronous semantics.
+
+`execute` runs to quiescence. Before each logical instant it actually opens,
+Tempo calls the host `input` callback once. It stops when the scheduler has no
+work queued for a possible next instant. Work invalidated during rollover can
+still cause one final empty instant to be opened. A continuation registered only
+as a signal awaiter does not keep the runtime alive by itself; once `execute`
+returns, a later input value cannot restart that invocation.
+
+The optional `~instants` argument is consequently a maximum, not a promise to
+run exactly that many instants. Without it there is no numerical limit, but
+quiescence still terminates the execution. A non-positive bound opens no
+instant. The bound is checked only between instants and cannot interrupt code
+that diverges without suspending during the current instant. Long-lived
+integrations must keep their lifetime explicit, for example with a driver
+branch that calls `pause ()` while the host should continue polling.
+
+Sequential and nested `execute` calls on one OCaml Domain are supported, with
+the signal-ownership rules described below. Tempo 0.3 does not support several
+`execute` invocations running concurrently on distinct Domains; the host must
+serialize them. This does not restrict Tempo's logical `parallel` operator.
+Host callbacks are synchronous and must not perform Tempo effects. A blocking
+callback blocks `execute`; an exception from a callback escapes `execute` and
+skips the remaining phases of that instant.
 
 ### Fundamental primitives
 
@@ -62,7 +81,9 @@ Reactive behavior is built from these primitive operations:
 - `await signal`  
   Suspend until `signal` becomes present; resume at the beginning of the next instant.
 - `await_immediate signal`  
-  Resume in the same instant if already present, otherwise like `await`.  
+  Return immediately if already present. Otherwise suspend and resume in the
+  same instant in which a later emission makes the signal present, without the
+  extra instant imposed by `await`.
   For determinism this is restricted to event signals.
 - `pause ()`  
   Suspend and resume at the next instant.
@@ -201,20 +222,25 @@ safety proof.
 - opam
 - dune >= 3.19
 
-### Install from opam
+### Install from source
+
+Tempo 0.3 is not yet published in the official opam repository. Install the
+current release candidate from its source tree:
 
 ```sh
-opam install tempo
+git clone https://github.com/Tempo-RP/tempo.git
+cd tempo
+opam install ./tempo.opam
 ```
 
-Optional add-ons:
+Install the optional PPX package from the same checkout when needed:
 
 ```sh
-opam install tempo-ppx       # lightweight syntax extensions
-opam install tempo-raylib tempo-fluidsynth tempo-score
+opam install ./tempo-ppx.opam
 ```
 
-This is enough if you only want to consume Tempo in your own projects.
+The generated API documentation is available at
+<https://tempo-rp.github.io/tempo/>.
 
 ## Quick start
 
@@ -258,7 +284,7 @@ dune build ./my_app.exe
 dune exec ./my_app.exe
 ```
 
-### Runtime logging
+### Runtime logging and diagnostics
 
 Tempo sends its runtime diagnostics through the dedicated
 `Tempo.Logging.source`, named `tempo.runtime`. Loading Tempo does not install a
@@ -278,12 +304,19 @@ Logs.Src.set_level Tempo.Logging.source (Some Logs.Debug)
 With the default `Logs` warning level, Tempo stays silent because its runtime
 diagnostics use the `Info` and `Debug` levels.
 
+`Tempo.runtime_snapshot` and the `on_snapshot` callback are experimental
+diagnostic interfaces in Tempo 0.3. Their record fields and counter meanings
+may change in later 0.x releases, as may the snapshot phases and callback
+schedule. Not every phase is emitted for every instant. These interfaces are
+intended for tests, profiling, and scheduler inspection, not for defining
+application behavior or persisted data.
+
 ## Contributing
 
 From source:
 
 ```sh
-git clone <repo-url> tempo-dev
+git clone https://github.com/Tempo-RP/tempo.git tempo-dev
 cd tempo-dev
 
 # install deps + docs/test dependencies

@@ -9,6 +9,7 @@
   emit_once_await_immediate
   emit_once_await_many
   emit_once_await_one
+  execute_quiescence_contract
   parallel
   parallel_exception_contract
   parallel_exception_lifecycle

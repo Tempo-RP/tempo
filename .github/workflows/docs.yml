@@ -29,13 +29,13 @@ jobs:
         with:
           ocaml-compiler: 5.4.1
 
-      - name: Install dependencies (tempo only)
+      - name: Install documentation dependencies
         run: |
           opam update
-          opam install ./tempo.opam --deps-only --with-doc
+          opam install . --deps-only --with-doc
 
       - name: Build API docs
-        run: opam exec -- dune build -p tempo @doc
+        run: opam exec -- dune build -p tempo,tempo-ppx @doc
 
       - name: Upload docs artifact (CI)
         uses: actions/upload-artifact@v4
